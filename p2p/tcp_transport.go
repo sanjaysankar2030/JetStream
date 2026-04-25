@@ -6,6 +6,22 @@ import (
 	"sync"
 )
 
+// Represent a node over a 'tcp' connection
+type TCPPeer struct {
+	// conn => Connection of the represented node
+	conn net.Conn
+	// if we Dial a connection => outbound == true
+	// if we accept and retrieve a  connection => outbound == false
+	outbound bool
+}
+
+func NewTCPPeer(conn net.Conn, outbound bool) *TCPPeer {
+	return &TCPPeer{
+		conn:     conn,
+		outbound: outbound,
+	}
+}
+
 // TCPTransport is a data transporting layer that uses tcp sockets
 type TCPTransport struct {
 	listenAddress string
@@ -43,5 +59,6 @@ func (t *TCPTransport) startAccepLoop() {
 }
 
 func (t *TCPTransport) handleConn(conn net.Conn) {
-	fmt.Printf("%+v\n", conn)
+	peer := NewTCPPeer(conn, true)
+	fmt.Printf(" new incoming connection :  %+v\n ", peer)
 }

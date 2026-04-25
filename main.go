@@ -1,9 +1,15 @@
 package main
 
 import (
-	"fmt"
+	"jetstream/p2p"
+	"log"
 )
 
 func main() {
-	fmt.Println("Hello World")
+	tr := p2p.NewTcpTranport(":6969")
+	if err := tr.ListenAndAccept(); err != nil {
+		log.Fatal(err)
+	}
+	select {}
+
 }
