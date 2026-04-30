@@ -34,8 +34,7 @@ type TCPTransportOpts struct {
 	ListenAddr    string
 	HandShakeFunc HandShakeFunc
 	Decoder       Decoder
-	OnPeer func(Peer) error
-	
+	OnPeer        func(Peer) error
 }
 
 // TCPTransport is a data transporting layer that uses tcp sockets
@@ -85,7 +84,7 @@ func (t *TCPTransport) startAccepLoop() {
 
 func (t *TCPTransport) handleConn(conn net.Conn) {
 	var err error
-	
+
 	defer func() {
 		fmt.Printf("Dropping peer connection %s \n", err)
 		conn.Close()
@@ -94,19 +93,19 @@ func (t *TCPTransport) handleConn(conn net.Conn) {
 	peer := NewTCPPeer(conn, true)
 	// Checking whethere the handshake is established
 	if err = t.HandShakeFunc(peer); err != nil {
-		return 
+		return
 	}
-	
-	if t.OnPeer !=nil{
-		if err = t.OnPeer(peer) ; err != nil{
+
+	if t.OnPeer != nil {
+		if err = t.OnPeer(peer); err != nil {
 			return
 		}
 	}
 	rpc := RPC{}
 	for {
-		if err := t.Decoder.Decode(conn, &rpc); err != nil {
-			fmt.Printf("TCP error : %s \n", err)
-			continue
+		err := t.Decoder.Decode(conn, &rpc)
+		if err != nil {
+			return
 		}
 		rpc.FromPort = conn.RemoteAddr()
 		t.rpcch <- rpc

@@ -11,7 +11,7 @@ func OnPeer(peer p2p.Peer) error {
 	peer.Close()
 	return nil
 }
- 
+
 func main() {
 	opts := p2p.TCPTransportOpts{
 		ListenAddr:    ":6969",
