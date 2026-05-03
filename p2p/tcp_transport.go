@@ -54,6 +54,8 @@ func NewTcpTranport(opts TCPTransportOpts) *TCPTransport {
 	}
 }
 
+//zed -> rust based
+
 // Consumes a channel implements a Tranport interface
 func (t *TCPTransport) Consume() <-chan RPC {
 	return t.rpcch
