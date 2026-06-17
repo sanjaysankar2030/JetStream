@@ -7,6 +7,7 @@ import (
 
 type Decoder interface {
 	Decode(io.Reader, *RPC) error
+	//io.Reader *RPC
 }
 
 // Gob encoder => "encoding/gob"

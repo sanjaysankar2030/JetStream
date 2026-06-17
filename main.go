@@ -8,7 +8,6 @@ import (
 
 func OnPeer(peer p2p.Peer) error {
 	fmt.Println("Doing some logic outside of the TCPTransport")
-	peer.Close()
 	return nil
 }
 
@@ -19,8 +18,8 @@ func main() {
 		Decoder:       p2p.DefaultDecoder{},
 		OnPeer:        OnPeer,
 	}
-	tr := p2p.NewTcpTranport(opts)
 
+	tr := p2p.NewTcpTranport(opts) // Builds a NewTCPTransport struct with opts and rpc channel
 	go func() {
 		for {
 			msg := <-tr.Consume()
