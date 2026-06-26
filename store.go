@@ -21,7 +21,7 @@ func CASPathTrasformFunc(key string) PathKey {
 	blocksize := 5
 	sliceLen := len(hashStr) / blocksize
 	paths := make([]string, sliceLen)
-	for i := 0; i < sliceLen; i++ {
+	for i := range sliceLen {
 		// we are splitting the individual data blocks and using i as a pointer
 		from, to := i*blocksize, (i*blocksize)+blocksize
 		paths[i] = hashStr[from:to]
@@ -78,14 +78,18 @@ func (s *Store) readStream(key string) (io.ReadCloser, error) {
 	return os.Open(pathKey.FullPath())
 }
 
+// TODO : RemoveAll() removes only the file in the directory
+// To remove all the dir we might need to pass in the base directory rather than the FullPath()
+// FullPath() returns dir/subdir/filename
 func (s *Store) Delete(key string) error {
+	fmt.Println("Called the Delete Method")
 	pathKey := s.PathTransformFunc(key)
-	defer func() {
-		log.Printf("deleted  [ %s ]", pathKey.Filename)
-	}()
-	return os.RemoveAll(pathKey.FullPath())
+	err := os.RemoveAll(pathKey.FullPath())
+	log.Printf("deleted FullPath [ %s ]", pathKey.FullPath())
+	return err
 }
 
+// Instead of Reader we might pass a peers net.Conn as it has a reader
 func (s *Store) writeStream(key string, r io.Reader) error {
 	pathKey := s.PathTransformFunc(key)
 	if err := os.MkdirAll(pathKey.PathName, os.ModePerm); err != nil {
@@ -101,5 +105,6 @@ func (s *Store) writeStream(key string, r io.Reader) error {
 		return err
 	}
 	log.Printf("written => (%d) to the disk in %s ", n, pathAndFullPath)
+	defer f.Close()
 	return nil
 }
