@@ -5,12 +5,15 @@ import (
 	"bytes"
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"strings"
 )
+
+const defaultRoot string = "stream"
 
 // Content Addressable Storage
 // uses the hashed key as the name the name of the files to maintain consitency among peers
@@ -43,11 +46,23 @@ func (p PathKey) FullPath() string {
 	return fmt.Sprintf("%s/%s", p.PathName, p.Filename)
 }
 
-func DefaultPathTransformFunc(key string) string {
-	return key
+func (p PathKey) FirstPathName() string {
+	path := strings.Split(p.PathName, "/")
+	if len(path) == 0 {
+		return ""
+	}
+	return path[0]
+}
+
+func DefaultPathTransformFunc(key string) PathKey {
+	return PathKey{
+		PathName: key,
+		Filename: key,
+	}
 }
 
 type StoreOpts struct {
+	Root              string
 	PathTransformFunc PathTransformFunc
 }
 
@@ -56,6 +71,12 @@ type Store struct {
 }
 
 func NewStore(opts StoreOpts) *Store {
+	if opts.PathTransformFunc == nil {
+		opts.PathTransformFunc = DefaultPathTransformFunc
+	}
+	if len(opts.Root) == 0 {
+		opts.Root = defaultRoot
+	}
 	return &Store{
 		StoreOpts: opts,
 	}
@@ -75,7 +96,7 @@ func (s *Store) Read(key string) (io.Reader, error) {
 
 func (s *Store) readStream(key string) (io.ReadCloser, error) {
 	pathKey := s.PathTransformFunc(key)
-	return os.Open(pathKey.FullPath())
+	return os.Open(s.Root + "/" + pathKey.FullPath())
 }
 
 // TODO : RemoveAll() removes only the file in the directory
@@ -84,18 +105,29 @@ func (s *Store) readStream(key string) (io.ReadCloser, error) {
 func (s *Store) Delete(key string) error {
 	fmt.Println("Called the Delete Method")
 	pathKey := s.PathTransformFunc(key)
-	err := os.RemoveAll(pathKey.FullPath())
-	log.Printf("deleted FullPath [ %s ]", pathKey.FullPath())
-	return err
+	defer func() {
+		log.Printf("deleted [%s ]this from the folder", s.Root+"/"+pathKey.FirstPathName())
+	}()
+	return os.RemoveAll(s.Root + "/" + pathKey.FirstPathName())
+}
+
+func (s *Store) Has(key string) bool {
+	fmt.Println("Called the Has Method -> *Store")
+	pathKey := s.PathTransformFunc(key)
+	_, err := os.Stat(s.Root + "/" + pathKey.FullPath())
+	if errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	return true
 }
 
 // Instead of Reader we might pass a peers net.Conn as it has a reader
 func (s *Store) writeStream(key string, r io.Reader) error {
 	pathKey := s.PathTransformFunc(key)
-	if err := os.MkdirAll(pathKey.PathName, os.ModePerm); err != nil {
+	if err := os.MkdirAll(s.Root+"/"+pathKey.PathName, os.ModePerm); err != nil {
 		return err
 	}
-	pathAndFullPath := pathKey.FullPath()
+	pathAndFullPath := s.Root + "/" + pathKey.FullPath()
 	f, err := os.Create(pathAndFullPath)
 	if err != nil {
 		return err

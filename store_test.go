@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"log"
 	"testing"
 )
 
@@ -45,8 +46,12 @@ func TestStore(t *testing.T) {
 	if err := s.writeStream(key, bytes.NewReader(data)); err != nil {
 		t.Error(err)
 	}
+	if has := s.Has(key); !has {
+		t.Errorf("Expected to have key %s have Null", key)
+	}
 	r, err := s.Read(key)
 	if err != nil {
+		log.Print("Error while Reading ")
 		t.Error(err)
 	}
 	b, _ := io.ReadAll(r)
@@ -61,4 +66,10 @@ func TestStore(t *testing.T) {
 		fmt.Println("Error while Deletion ", del_err)
 	}
 	fmt.Println("Deletion Succesful")
+	// has := s.Has(key)
+	// if has {
+	// 	fmt.Println("The Folder is present ")
+	// } else {
+	// 	fmt.Println("The Folder is absent")
+	// }
 }
