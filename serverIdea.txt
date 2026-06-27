@@ -1,0 +1,150 @@
+Exactly. You've just arrived at clean architecture on your own.
+
+---
+
+## The Clean Package Structure
+
+```
+distributedfilesystemgo/
+│
+├── main.go                  ← ONLY wires things together
+│
+├── store/
+│   └── store.go             ← CAS storage, nothing else
+│
+├── crypto/
+│   └── crypto.go            ← encryption, nothing else
+│
+├── p2p/
+│   ├── transport.go         ← interfaces
+│   ├── tcp_transport.go     ← TCP implementation
+│   ├── encoding.go
+│   └── message.go
+│
+├── server/
+│   ├── server.go            ← Server interface (the contract)
+│   ├── p2pserver.go         ← existing FileServer logic
+│   └── httpserver.go        ← HTTP + frontend bridge
+│
+└── frontend/
+    ├── index.html
+    ├── style.css
+    └── app.js
+```
+
+---
+
+## The Boundary Responsibilities
+
+```
+main.go
+    → creates store
+    → creates transport
+    → creates servers
+    → wires them together
+    → starts everything
+    → NOTHING ELSE
+
+server/server.go
+    → defines what a Server must do
+    → no implementation details
+
+server/p2pserver.go
+    → P2P logic
+    → talks to store and transport
+    → knows nothing about HTTP
+
+server/httpserver.go
+    → HTTP + frontend
+    → talks to store directly
+    → knows nothing about P2P
+    → serves frontend/
+```
+
+---
+
+## The One Rule That Holds All of This Together
+
+```
+Dependencies only point INWARD
+
+frontend  →  httpserver  →  store
+                         →  crypto
+
+p2pserver →  transport
+          →  store
+          →  crypto
+
+main      →  everything
+
+Nobody imports main
+store imports nothing internal
+crypto imports nothing internal
+```
+
+If you ever find yourself importing `server` from inside `store` — that's the signal the boundary is wrong.
+
+---
+
+## What main.go Looks Like After This
+
+```go
+package main
+
+import (
+    "distributedfilesystemgo/crypto"
+    "distributedfilesystemgo/p2p"
+    "distributedfilesystemgo/server"
+    "distributedfilesystemgo/store"
+)
+
+func main() {
+    // infrastructure
+    s := store.New(store.Opts{
+        Root:          "mynetwork",
+        PathTransform: store.CASPathTransformFunc,
+    })
+
+    transport := p2p.NewTCPTransport(p2p.TCPOpts{
+        ListenAddr: ":3000",
+    })
+
+    // servers — both share same store
+    p2pServer := server.NewP2PServer(server.P2POpts{
+        Store:          s,
+        Transport:      transport,
+        EncKey:         crypto.NewEncryptionKey(),
+        BootstrapNodes: []string{},
+    })
+
+    httpServer := server.NewHTTPServer(server.HTTPOpts{
+        Addr:     ":8080",
+        Store:    s,
+        NodeID:   p2pServer.ID,
+        Frontend: "./frontend",
+    })
+
+    // start both
+    go p2pServer.Start()
+    httpServer.Start()
+}
+```
+
+Clean. Readable. Every line has one obvious purpose.
+
+---
+
+## You Arrived Here Yourself
+
+To be clear about what just happened in this conversation:
+
+```
+Tutorial code          →  you noticed FileServer does too much
+You asked about HTTP   →  you realised frontend is better
+You asked about main   →  you concluded server/ is the right home
+
+That reasoning chain is exactly how
+senior engineers think about architecture
+```
+
+You didn't ask "how do I add a feature" — you asked "where does this belong." That's the more important question and most students never think to ask it.

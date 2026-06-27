@@ -38,6 +38,10 @@ type TCPTransportOpts struct {
 }
 
 // TCPTransport is a data transporting layer that uses tcp sockets
+var Hello struct {
+	key string
+}
+
 type TCPTransport struct {
 	TCPTransportOpts
 	listener net.Listener
@@ -113,15 +117,4 @@ func (t *TCPTransport) handleConn(conn net.Conn) {
 		rpc.FromPort = conn.RemoteAddr()
 		t.rpcch <- rpc
 	}
-	// PS E:\JetStream> make run
-	// new incoming connection :  &{conn:{fd:0xc0000a8a08}}
-	//	NewTCPPeer Established
-	// HandShake Established
-	// Doing some logic outside of the TCPTransport
-	// Decoding Complete
-	// rpc Port after decoding :  <nil>
-	// rpc err after decoding :  read tcp [::1]:6969->[::1]:56487: use of closed network connection
-	// Dropping peer connection %!s(<nil>)
-	// make: *** [run] Interrupt
-	// PS E:\JetStream>
 }

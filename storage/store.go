@@ -1,10 +1,7 @@
-// 02:18:55
-package main
+package storage
 
 import (
 	"bytes"
-	"crypto/sha1"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -14,26 +11,6 @@ import (
 )
 
 const defaultRoot string = "stream"
-
-// Content Addressable Storage
-// uses the hashed key as the name the name of the files to maintain consitency among peers
-// returns a string which is the pathName transformed
-func CASPathTrasformFunc(key string) PathKey {
-	hash := sha1.Sum([]byte(key))
-	hashStr := hex.EncodeToString(hash[:])
-	blocksize := 5
-	sliceLen := len(hashStr) / blocksize
-	paths := make([]string, sliceLen)
-	for i := range sliceLen {
-		// we are splitting the individual data blocks and using i as a pointer
-		from, to := i*blocksize, (i*blocksize)+blocksize
-		paths[i] = hashStr[from:to]
-	}
-	return PathKey{
-		PathName: strings.Join(paths, "/"),
-		Filename: hashStr,
-	}
-}
 
 type PathTransformFunc func(string) PathKey
 
@@ -81,6 +58,9 @@ func NewStore(opts StoreOpts) *Store {
 		StoreOpts: opts,
 	}
 }
+func (s *Store) Write(key string, r io.Reader) error {
+	return s.writeStream(key, r)
+}
 
 func (s *Store) Read(key string) (io.Reader, error) {
 	f, err := s.readStream(key)
@@ -99,9 +79,6 @@ func (s *Store) readStream(key string) (io.ReadCloser, error) {
 	return os.Open(s.Root + "/" + pathKey.FullPath())
 }
 
-// TODO : RemoveAll() removes only the file in the directory
-// To remove all the dir we might need to pass in the base directory rather than the FullPath()
-// FullPath() returns dir/subdir/filename
 func (s *Store) Delete(key string) error {
 	fmt.Println("Called the Delete Method")
 	pathKey := s.PathTransformFunc(key)
@@ -119,6 +96,10 @@ func (s *Store) Has(key string) bool {
 		return false
 	}
 	return true
+}
+
+func (s *Store) Clear() error {
+	return os.RemoveAll(s.Root)
 }
 
 // Instead of Reader we might pass a peers net.Conn as it has a reader
