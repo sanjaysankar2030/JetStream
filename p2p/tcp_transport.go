@@ -1,7 +1,9 @@
 package p2p
 
 import (
+	"errors"
 	"fmt"
+	"log"
 	"net"
 	// "sync"
 )
@@ -26,8 +28,12 @@ func NewTCPPeer(conn net.Conn, outbound bool) *TCPPeer {
 Close() => conn.Close()
 Close() implements the Peer Interface
 */
-func (p *TCPPeer) Close() error {
+func (p *TCPPeer) ConnClose() error {
 	return p.conn.Close()
+}
+
+func (p *TCPTransport) Close() error {
+	return p.listener.Close()
 }
 
 type TCPTransportOpts struct {
@@ -38,9 +44,6 @@ type TCPTransportOpts struct {
 }
 
 // TCPTransport is a data transporting layer that uses tcp sockets
-var Hello struct {
-	key string
-}
 
 type TCPTransport struct {
 	TCPTransportOpts
@@ -74,9 +77,21 @@ func (t *TCPTransport) ListenAndAccept() error {
 	return nil
 }
 
+func (t *TCPTransport) Dial(addr string)error{
+	conn , err :=net.Dial("tcp",addr)
+	if err != nil{
+		return err
+	}
+	return nil
+}
+
 func (t *TCPTransport) startAccepLoop() {
 	for {
 		conn, err := t.listener.Accept()
+		if errors.Is(err, net.ErrClosed) {
+			log.Printf("the Error is ErrClosed Error\n %s", err)
+			return
+		}
 		if err != nil {
 			fmt.Printf("Tcp accept error : %s\n", err)
 		} else {

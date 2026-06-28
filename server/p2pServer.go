@@ -1,20 +1,25 @@
 package server
 
 import (
+	"fmt"
+	"io"
 	"jetstream/p2p"
 	"jetstream/storage"
+	"log"
 )
 
 type P2PServerOpts struct {
 	ListenAddr        string
 	StorageRoot       string
 	PathTransformFunc storage.PathTransformFunc
-	transport         p2p.TCPTransport
+	transport         p2p.Transport
+	BootStrapNodes []string
 }
 
 type P2PServer struct {
 	P2PServerOpts
-	store *storage.Store
+	store  *storage.Store
+	quitch chan struct{}
 }
 
 func NewP2PServer(opts P2PServerOpts) *P2PServer {
@@ -25,12 +30,41 @@ func NewP2PServer(opts P2PServerOpts) *P2PServer {
 	return &P2PServer{
 		P2PServerOpts: opts,
 		store:         storage.NewStore(storeOpts),
+		quitch:        make(chan struct{}),
 	}
 }
+
+func (p *P2PServer) loop() {
+	defer func() {
+		log.Printf("Server Closed due to the quitch in P2PServer invoked ")
+		p.transport.Close()
+	}()
+	for {
+		select {
+		case msg := <-p.P2PServerOpts.transport.Consume():
+			fmt.Printf(" The Message Recieved is %s ", msg)
+		case <-p.quitch:
+			return
+		}
+	}
+}
+
 func (p *P2PServer) Start() error {
 	if err := p.P2PServerOpts.transport.ListenAndAccept(); err != nil {
 		return err
 	}
+	p.loop()
 	return nil
+}
 
+func (p *P2PServer) Stop() {
+	close(p.quitch)
+}
+
+func (s *P2PServer) Store(key string, r io.Reader) error {
+	return s.store.Write(key, r)
+}
+
+func (s *P2PServer) Close() {
+	close(s.quitch)
 }

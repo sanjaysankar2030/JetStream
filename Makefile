@@ -5,4 +5,4 @@ run: build
 	@./bin/fs
 
 test:
-	@go test -short ./...
+	go test ./... -v -run $(t)
