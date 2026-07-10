@@ -1,33 +1,27 @@
 package main
 
 import (
-	"fmt"
 	"jetstream/p2p"
+	"jetstream/server"
+	"jetstream/storage"
 	"log"
 )
 
-func OnPeer(peer p2p.Peer) error {
-	fmt.Println("Doing some logic outside of the TCPTransport")
-	return nil
-}
-
 func main() {
-	opts := p2p.TCPTransportOpts{
-		ListenAddr:    ":6969",
+	tcpTransportOpts := p2p.TCPTransportOpts{
+		ListenAddr:    ":3000",
 		HandShakeFunc: p2p.NOPHandShakeFunc,
 		Decoder:       p2p.DefaultDecoder{},
-		OnPeer:        OnPeer,
 	}
-
-	tr := p2p.NewTcpTranport(opts) // Builds a NewTCPTransport struct with opts and rpc channel
-	go func() {
-		for {
-			msg := <-tr.Consume()
-			fmt.Printf("Message %+v \n", msg)
-		}
-	}()
-
-	if err := tr.ListenAndAccept(); err != nil {
+	tcpTransport := p2p.NewTcpTranport(tcpTransportOpts)
+	FileServerOpts := server.P2PServerOpts{
+		ListenAddr:        ":3000",
+		StorageRoot:       ":3000_network",
+		PathTransformFunc: storage.CASPathTrasformFunc,
+		Transport:         tcpTransport,
+	}
+	s := server.NewP2PServer(FileServerOpts)
+	if err := s.Start(); err != nil {
 		log.Fatal(err)
 	}
 	select {}

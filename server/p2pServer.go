@@ -12,8 +12,8 @@ type P2PServerOpts struct {
 	ListenAddr        string
 	StorageRoot       string
 	PathTransformFunc storage.PathTransformFunc
-	transport         p2p.Transport
-	BootStrapNodes []string
+	Transport         p2p.Transport
+	BootStrapNodes    []string
 }
 
 type P2PServer struct {
@@ -37,11 +37,11 @@ func NewP2PServer(opts P2PServerOpts) *P2PServer {
 func (p *P2PServer) loop() {
 	defer func() {
 		log.Printf("Server Closed due to the quitch in P2PServer invoked ")
-		p.transport.Close()
+		p.Transport.Close()
 	}()
 	for {
 		select {
-		case msg := <-p.P2PServerOpts.transport.Consume():
+		case msg := <-p.P2PServerOpts.Transport.Consume():
 			fmt.Printf(" The Message Recieved is %s ", msg)
 		case <-p.quitch:
 			return
@@ -50,7 +50,7 @@ func (p *P2PServer) loop() {
 }
 
 func (p *P2PServer) Start() error {
-	if err := p.P2PServerOpts.transport.ListenAndAccept(); err != nil {
+	if err := p.P2PServerOpts.Transport.ListenAndAccept(); err != nil {
 		return err
 	}
 	p.loop()

@@ -77,9 +77,9 @@ func (t *TCPTransport) ListenAndAccept() error {
 	return nil
 }
 
-func (t *TCPTransport) Dial(addr string)error{
-	conn , err :=net.Dial("tcp",addr)
-	if err != nil{
+func (t *TCPTransport) Dial(addr string) error {
+	_, err := net.Dial("tcp", addr)
+	if err != nil {
 		return err
 	}
 	return nil
