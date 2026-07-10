@@ -36,13 +36,14 @@ func NewP2PServer(opts P2PServerOpts) *P2PServer {
 
 func (p *P2PServer) loop() {
 	defer func() {
-		log.Printf("Server Closed due to the quitch in P2PServer invoked ")
+		log.Printf("Server Closed due to the quitch in P2PServer invoked \n")
 		p.Transport.Close()
 	}()
+	fmt.Printf("Listening to the port %s \n", p.ListenAddr)
 	for {
 		select {
 		case msg := <-p.P2PServerOpts.Transport.Consume():
-			fmt.Printf(" The Message Recieved is %s ", msg)
+			fmt.Printf(" The Message Received is %s \n ", msg)
 		case <-p.quitch:
 			return
 		}

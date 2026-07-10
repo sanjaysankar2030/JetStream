@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	// "sync"
 )
 
 // Represent a node over a 'tcp' connection

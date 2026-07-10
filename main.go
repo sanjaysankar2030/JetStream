@@ -5,6 +5,7 @@ import (
 	"jetstream/server"
 	"jetstream/storage"
 	"log"
+	"time"
 )
 
 func main() {
@@ -24,5 +25,11 @@ func main() {
 	if err := s.Start(); err != nil {
 		log.Fatal(err)
 	}
-	select {}
+	go func() {
+		time.Sleep(time.Second * 3)
+		s.Start()
+	}()
+	if err := s.Start(); err != nil {
+		log.Fatal(err)
+	}
 }
