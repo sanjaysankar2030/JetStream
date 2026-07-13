@@ -7,7 +7,7 @@ import (
 	"net"
 )
 
-// Represent a node over a 'tcp' connection
+// TCPPeer Represents a node over a 'tcp' connection
 type TCPPeer struct {
 	// conn => Connection of the represented node
 	conn net.Conn
@@ -76,11 +76,13 @@ func (t *TCPTransport) ListenAndAccept() error {
 	return nil
 }
 
+// Dial implements the Transport interface
 func (t *TCPTransport) Dial(addr string) error {
-	_, err := net.Dial("tcp", addr)
+	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return err
 	}
+	go t.handleConn(conn, true)
 	return nil
 }
 
@@ -95,12 +97,12 @@ func (t *TCPTransport) startAccepLoop() {
 			fmt.Printf("Tcp accept error : %s\n", err)
 		} else {
 			fmt.Printf(" new incoming connection :  %+v\n ", conn)
-			go t.handleConn(conn)
+			go t.handleConn(conn, false)
 		}
 	}
 }
 
-func (t *TCPTransport) handleConn(conn net.Conn) {
+func (t *TCPTransport) handleConn(conn net.Conn, outbounds bool) {
 	var err error
 
 	// Drops the connection at the end of the function execution
@@ -109,13 +111,13 @@ func (t *TCPTransport) handleConn(conn net.Conn) {
 		conn.Close()
 	}()
 
-	peer := NewTCPPeer(conn, true)
-	fmt.Println("NewTCPPeer Established")
+	peer := NewTCPPeer(conn, outbounds)
+	log.Println("NewTCPPeer Established")
 	// Checking whether the handshake is established
 	if err = t.HandShakeFunc(peer); err != nil {
 		return
 	}
-	fmt.Println("HandShake Established")
+	log.Println("HandShake Established")
 
 	if t.OnPeer != nil {
 		if err = t.OnPeer(peer); err != nil {

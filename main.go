@@ -5,31 +5,29 @@ import (
 	"jetstream/server"
 	"jetstream/storage"
 	"log"
-	"time"
 )
 
-func main() {
+func makeServer(listenAddr string, nodes ...string) *server.P2PServer {
 	tcpTransportOpts := p2p.TCPTransportOpts{
-		ListenAddr:    ":3000",
+		ListenAddr:    listenAddr,
 		HandShakeFunc: p2p.NOPHandShakeFunc,
 		Decoder:       p2p.DefaultDecoder{},
 	}
 	tcpTransport := p2p.NewTcpTranport(tcpTransportOpts)
 	FileServerOpts := server.P2PServerOpts{
-		ListenAddr:        ":3000",
-		StorageRoot:       ":3000_network",
+		StorageRoot:       listenAddr + "_network",
 		PathTransformFunc: storage.CASPathTrasformFunc,
 		Transport:         tcpTransport,
+		BootStrapNodes:    nodes,
 	}
-	s := server.NewP2PServer(FileServerOpts)
-	if err := s.Start(); err != nil {
-		log.Fatal(err)
-	}
+	return server.NewP2PServer(FileServerOpts)
+}
+
+func main() {
+	s1 := makeServer(":3000", "")
+	s2 := makeServer(":4000", ":3000")
 	go func() {
-		time.Sleep(time.Second * 3)
-		s.Start()
+		log.Fatal(s1.Start())
 	}()
-	if err := s.Start(); err != nil {
-		log.Fatal(err)
-	}
+	s2.Start()
 }
