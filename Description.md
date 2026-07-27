@@ -1,5 +1,4 @@
 # Distributed File System in Go — Complete Project Reference
-
 ---
 
 ## Table of Contents
