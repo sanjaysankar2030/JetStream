@@ -1,5 +1,6 @@
 package main
 
+//TODO: Wails golang frontend implementation
 import (
 	"jetstream/p2p"
 	"jetstream/server"

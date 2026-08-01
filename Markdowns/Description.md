@@ -26,20 +26,23 @@
 
 ## 1. What This Project Is
 
-A **peer-to-peer distributed file system** built entirely in Go. Every node in the network is simultaneously a server and a client — there is no central master, no coordinator, and no external dependency.
+A **peer-to-peer distributed file system** built entirely in Go. Every node is simultaneously a server and a client — there is no central coordinator, and no external dependencies.
 
-Think of it as a simplified version of IPFS or an early BitTorrent storage layer: any node can store a file, and any other node can retrieve it — even if that node never saw the file before.
+Think of it as a stepping stone between IPFS (simple DHT + CAS) and real distributed filesystems (GFS/HDFS): any node can store a file across multiple peers with automatic replication detection, and any node can retrieve it from the network while respecting chunk locality.
 
-**Core Goals:**
-- Allow any node to `Store` a file and have it automatically broadcast to all connected peers
-- Allow any node to `Get` a file — serving it from local disk if present, or fetching it from the network if not
-- Store files in a content-addressed, collision-proof layout on disk
-- Encrypt all data in transit using AES-256-CTR so no peer sees plaintext bytes over the wire
+**Core Goals (In Priority Order):**
+1. **Networking layer** (supporting role): Persistent TCP connections between peers with heartbeat-based failure detection and exponential backoff reconnection
+2. **Metadata service**: Track which chunks belong to which files and which nodes hold which chunks (in-memory maps initially; single leader)
+3. **File chunking**: Split large files into fixed-size chunks (4MB default), each content-addressed via SHA-256
+4. **Replication**: Asynchronously replicate chunks to N replica nodes, tracking replica locations in metadata
+5. **Smart retrieval**: When requesting a file, fetch chunks from known replica locations instead of broadcasting to all peers
+6. **Encryption**: All data in transit encrypted with AES-256-CTR so no peer sees plaintext bytes over the wire
 
-**What this is NOT:**
-- It is **not** Google File System (GFS). GFS has a single master server, chunk splitting at 64MB, a metadata namespace, and a formal replication protocol. None of that exists here.
-- It is **not** HDFS. There are no NameNodes, DataNodes, or block reports.
-- It is a flat, serverless, educational P2P storage system with broadcast-based replication.
+**What this is NOT (skip for now):**
+- It is **not** a consensus system (Raft/BFT). Metadata is currently centralized (leader only). Consensus comes after we nail replication.
+- It is **not** blockchain or DHT-first. Networking is a supporting layer; focus is DFS logic.
+- It is **not** production-grade. No erasure coding, no garbage collection, no quota management. We're learning DFS architecture.
+- It is **not** GFS/HDFS yet. Those have chunk splitting at 64+MB, block reports, formal replication protocol. We have simpler equivalents now.
 
 ---
 
@@ -64,22 +67,34 @@ Think of it as a simplified version of IPFS or an early BitTorrent storage layer
 ```
 distributedfilesystemgo/
 │
-├── main.go              ← Bootstrap: wires up 3 nodes, runs demo Store/Get
+├── main.go                     ← Bootstrap: wires up 3 nodes, runs demo Store/Get
 │
-├── server.go            ← FileServer: the core node logic (Store, Get, broadcast)
-├── store.go             ← CAS storage layer: disk read/write with SHA-1 path layout
-├── crypto.go            ← AES-256-CTR encrypt/decrypt helpers + ID/key generation
+├── server.go                   ← FileServer: core node logic (Store, Get, file reconstruction)
+├── store.go                    ← CAS storage layer: disk read/write with SHA-256 path layout
+├── crypto.go                   ← AES-256-CTR encrypt/decrypt + key generation
 │
-├── crypto_test.go       ← Unit tests for encryption round-trip
-├── store_test.go        ← Unit tests for CAS store read/write/delete
+├── peer/
+│   ├── pool.go                 ← PeerPool: persistent TCP connection, heartbeat, backoff reconnect
+│   ├── message.go              ← Protocol messages (PING, GET_CHUNK, PUT_CHUNK, REPLICATE, DELETE)
+│   └── protocol.go             ← Message serialization/deserialization
+│
+├── metadata/
+│   ├── service.go              ← MetadataService: file→chunks mapping, chunk→nodes tracking
+│   ├── chunking.go             ← File splitting logic (fixed 4MB chunks), chunk ID generation
+│   └── index.go                ← In-memory metadata maps (files, chunks, replicas)
 │
 ├── p2p/
-│   ├── transport.go     ← Transport + Peer interfaces
-│   ├── tcp_transport.go ← TCP implementation of Transport
-│   ├── tcp_peer.go      ← TCP implementation of Peer (wraps net.Conn)
-│   ├── encoding.go      ← Decoder interface + GOBDecoder implementation
-│   ├── handshake.go     ← Handshake function type
-│   └── message.go       ← RPC struct (From string, Payload []byte)
+│   ├── transport.go            ← Transport + Peer interfaces (legacy, being refactored)
+│   ├── tcp_transport.go        ← TCP implementation of Transport
+│   ├── tcp_peer.go             ← TCP implementation of Peer
+│   ├── encoding.go             ← Decoder interface + GOBDecoder
+│   ├── handshake.go            ← Handshake function type
+│   └── message.go              ← Legacy RPC struct (will consolidate with peer/message.go)
+│
+├── crypto_test.go              ← Unit tests: encryption round-trip
+├── store_test.go               ← Unit tests: CAS store read/write/delete
+├── metadata_test.go            ← Unit tests: chunking, file reconstruction
+├── peer_pool_test.go           ← Unit tests: connection management, heartbeat
 │
 ├── go.mod
 ├── go.sum
@@ -89,22 +104,50 @@ distributedfilesystemgo/
 
 ---
 
-## 4. The Two Big Parts
+## 4. The Three-Layer Architecture
 
-### Part 1 — Local Storage (CAS Layer)
-The `Store` struct manages how files are written to and read from disk on a single node. It is completely independent of the network — you can use it standalone. It implements:
+### Layer 1 — Networking (Supporting Role)
+Handles peer connectivity and message transport. **Not** the focus of learning; should be as simple as possible.
 
-- **Content-addressed path derivation** — SHA-1 hash of the key, split into nested 5-character directories
-- **Per-node namespacing** — all files are stored under `root/<nodeID>/`, so multiple nodes on the same machine don't collide
-- **Pluggable path transform** — `PathTransformFunc` lets you swap the layout strategy; `CASPathTransformFunc` is the production default
+**Key Components:**
+- `PeerPool`: Maintains persistent TCP connection to each peer
+  - Automatic reconnection with exponential backoff
+  - Heartbeat (PING) every 5s to detect failures
+  - Marks peer dead after 3 consecutive missed heartbeats
+- Message protocol: `PING`, `GET_CHUNK`, `PUT_CHUNK`, `REPLICATE`, `DELETE`
+- Request/response correlation via message IDs
 
-### Part 2 — Network Layer (P2P FileServer)
-The `FileServer` connects nodes together. It:
+**Responsibility:** Get bytes reliably from point A to point B. Nothing more.
 
-1. Listens for incoming TCP connections via the `Transport` interface
-2. Maintains a live map of connected `Peer`s
-3. When a file is stored locally, it serialises a `MessageStoreFile` and broadcasts it to all peers, then streams the encrypted file bytes
-4. When a file is requested that isn't local, it broadcasts a `MessageGetFile` to all peers; the first peer that has it streams the file back
+### Layer 2 — Distributed Filesystem (Core Learning)
+Where the real DFS problems live.
+
+**Key Components:**
+- `MetadataService`: Single leader (for now)
+  - Maps `filename → [chunkID1, chunkID2, ...]`
+  - Maps `chunkID → [nodeA, nodeB, nodeC]` (replica locations)
+  - Persisted to disk (write-ahead log, snapshots come later)
+  
+- `ChunkingService`: Split files into 4MB chunks
+  - Compute SHA-256 hash of each chunk → chunk ID
+  - No padding; last chunk can be smaller
+  - Reconstruct file by concatenating chunks in order
+
+- `ReplicationManager`: Async replication logic
+  - When storing chunk, spawn goroutines to replicate to N peers
+  - Track which replicas confirmed receipt
+  - If replication fails, log and move on (auto-repair comes later)
+
+**Responsibility:** Answer "what chunks form this file?" and "which nodes have this chunk?"
+
+### Layer 3 — Local Storage (CAS Layer)
+The `Store` struct manages disk reads/writes on a single node. Independent of networking.
+
+- **Content-addressed path derivation** — SHA-256 hash of chunk ID (not filename), split into nested directories
+- **Per-node namespacing** — all chunks stored under `root/<nodeID>/`, so multiple nodes on same machine don't collide
+- **Pluggable path transform** — allows swapping layout strategy
+
+**Responsibility:** Durable, efficient storage of chunk bytes on local disk.
 
 ---
 
@@ -549,38 +592,141 @@ func makeServer(listenAddr string, nodes ...string) *FileServer {
 
 ---
 
-## 16. Current Scope vs. What's Missing
+## 16. Immediate Priorities: What To Build Next
 
-### What Is Implemented ✅
+### Phase 1: Build-Measure-Optimize (Start Here)
 
-| Feature | Status |
-|---|---|
-| TCP P2P transport | ✅ |
-| Content-addressed local storage (SHA-1) | ✅ |
-| AES-256-CTR encryption on Store broadcast | ✅ |
-| Broadcast Store to all connected peers | ✅ |
-| Network Get with local caching | ✅ |
-| Per-node ID and namespaced storage | ✅ |
-| Static bootstrap peer discovery | ✅ |
-| Pluggable PathTransformFunc | ✅ |
-| Pluggable Transport interface | ✅ |
-| Unit tests for CAS store and crypto | ✅ |
+Add **two features**, identify bottlenecks, fix them, repeat. Don't gold-plate.
 
-### What Is NOT Implemented ❌
+#### Networking Feature #1: Connection Management
+**What to build:**
+- `PeerPool`: persistent TCP connection to each peer (one pool per peer)
+- Heartbeat: PING every 5s
+- Exponential backoff reconnection: 100ms → 200ms → 400ms → ... → cap at 30s
+- Dead peer detection: mark dead after 3 consecutive missed heartbeats
+- Remove dead peer from active set
 
-| Feature | Impact |
-|---|---|
-| Replication factor control | Files always replicated to ALL peers — unscalable |
-| File metadata / index | Cannot list what files exist in the network |
-| Node failure detection / heartbeats | Dead peers stay in map forever |
-| File chunking for large files | Full file buffered in memory before broadcast |
-| DHT-based peer routing | Every Get/Store broadcasts to all peers |
-| File integrity verification (checksum) | Corrupt transfers written silently |
-| Proper sync on Get (replaces Sleep) | Race condition if network is slow |
-| Encryption on handleMessageGetFile | Bug: responding peer sends plaintext |
-| HTTP or CLI interface | No user-facing API — demo only in main.go |
-| Persistence of peer list | Restarts lose all peer knowledge |
-| Authentication between peers | Any TCP client can connect and read/write |
+**Why this first:** All other features depend on stable peer connectivity. No point implementing replication if connections drop randomly.
+
+**Test it:** Kill a peer, watch it get marked dead after 15s. Reconnect it, watch it rejoin.
+
+**Estimated work:** 50-100 lines of Go. 2-3 hours.
+
+#### DFS Feature #1: Metadata Service + File Chunking
+**What to build:**
+- `MetadataService`: two in-memory maps:
+  - `files[filename] = [chunkID1, chunkID2, ...]`
+  - `chunks[chunkID] = [nodeA, nodeB, nodeC]`
+- `ChunkingService`: split file into 4MB chunks
+  - Hash each chunk with SHA-256 → chunk ID
+  - Store chunks in CAS individually
+  - Reconstruct file by concatenating chunks in order
+- `ReplicationManager`: async replicate chunks
+  - When storing chunk, spawn goroutines to replicate to N peers
+  - Track which nodes confirmed receipt
+  - Log failures (don't auto-retry yet)
+
+**Why this second:** Core DFS problem. Once this works, you know "where is this chunk?" without broadcasting. This is the fundamental insight that separates real DFS from dumb broadcasting.
+
+**Test it:** Store 10MB file → split into 3 chunks → replicate to 2 peers → retrieve from 3rd peer → verify byte-for-byte integrity.
+
+**Estimated work:** 200-300 lines. 6-8 hours.
+
+---
+
+### Phase 2: Fix Bottlenecks (After Phase 1)
+Once Phase 1 works, **immediately run it under load and see what breaks:**
+
+- [ ] Dead peer replicas aren't re-replicated (auto-repair)
+- [ ] Checksum mismatches on receipt aren't detected (add SHA-256 verification)
+- [ ] Replication confirmations aren't tracked (do we know if all N replicas succeeded?)
+- [ ] Metadata isn't persistent (restart node → lose all file knowledge)
+
+Fix these one by one, measuring impact each time.
+
+---
+
+### Phase 3: Scalability (After Phase 2)
+Only after Phase 1 + 2 works reliably:
+
+- [ ] Consistent hashing (smart peer selection instead of random)
+- [ ] Topology awareness (don't replicate to same rack)
+- [ ] Metadata persistence (write-ahead log + snapshots)
+- [ ] Leader election (when leader dies, promote follower)
+
+---
+
+### Explicitly NOT Doing (Yet)
+- ❌ **Blockchain**: Zero use case for DFS. Skip entirely.
+- ❌ **DHT**: Premature. Broadcast works fine at 3-10 nodes. Add after you hit bottlenecks at 100+ nodes.
+- ❌ **Raft consensus**: Only needed if metadata leader crashes. Single leader sufficient for learning.
+- ❌ **HTTP/gRPC API**: Not needed for core DFS learning. Add after architecture is solid.
+- ❌ **Erasure coding**: Complex. Replication teaches the same concepts and is simpler.
+- ❌ **MapReduce**: Comes after DFS itself is production-ready.
+
+---
+
+## 17. Common Mistakes to Avoid
+
+| Mistake | Why It's a Problem | Fix |
+|---|---|---|
+| Providing `EncKey` of wrong length | `aes.NewCipher` requires exactly 16, 24, or 32 bytes. Wrong length = panic | Always use `newEncryptionKey()` which generates exactly 32 bytes |
+| Same `StorageRoot` for multiple nodes on same machine | Node files collide because they share the same `root/` directory | Use distinct roots per node (e.g. `":3000_network"`, `":7000_network"`) |
+| Using `DefaultPathTransformFunc` in production | Files stored flat by raw key name — no directory sharding, filesystem degrades at scale | Always use `CASPathTransformFunc` |
+| Replicating to ALL peers instead of N | Broadcast replication doesn't scale beyond 10 nodes. Every Store = O(n) messages | Implement replication factor control early. Track per-chunk replica locations. |
+| Broadcasting every Get to all peers | Query traffic grows O(n). At 100 nodes, every Get = 100 messages | Use metadata service to know which nodes have the chunk. Query 1-2, not all. |
+| Not detecting dead peers | Dead peer connections remain in map forever. All sends to dead peer fail silently. | Implement heartbeat: PING every 5s, mark dead after 3 missed heartbeats. |
+| Buffering entire file in memory before replication | A 2GB video file = 2GB heap. Node crashes or OOMs. | Stream chunks individually (4MB chunks). Replicate as you go. |
+| Ignoring metadata persistence | Node restarts → lose all file knowledge. Must re-broadcast everything. | Add write-ahead log. Persist metadata to disk before returning ACK. |
+| Single metadata leader with no backup | Leader crashes → entire cluster is down (can't write new files). | Implement follower promotion or Raft after Phase 2 is stable. |
+
+---
+
+## 18. The Build-Measure-Optimize Loop
+
+This is the most important pattern to understand:
+
+1. **Build** Phase 1 (Connection Pool + Metadata Service)
+2. **Measure** under load: throughput, latency, CPU, memory
+3. **Identify** the bottleneck (network? metadata? storage? memory?)
+4. **Optimize** that one thing
+5. **Measure** again
+6. Repeat
+
+Example bottleneck trajectory:
+```
+Phase 1 → Bottleneck: Dead peers not detected
+        → Fix: Heartbeat + exponential backoff
+        
+Phase 2 → Bottleneck: Metadata not persistent (crashes lose data)
+        → Fix: WAL + snapshots
+        
+Phase 3 → Bottleneck: Metadata leader is SPOF
+        → Fix: Leader election (Raft) or follower promotion
+        
+Phase 4 → Bottleneck: Replication to all nodes doesn't scale
+        → Fix: Consistent hashing + selective replication
+        
+Phase 5 → Bottleneck: Network topology not considered
+        → Fix: Rack-aware placement
+```
+
+Each phase teaches a different DFS lesson. Rushing to Raft or DHT before Phase 1 is stable = wasted effort.
+
+---
+
+## 19. Future Work (After Phase 2)
+
+If you continue building beyond Phase 2, this is the natural progression:
+
+- **Phase 3**: Metadata persistence + leader election (single-leader or Raft)
+- **Phase 4**: Automatic replica repair (detect missing replicas, re-replicate)
+- **Phase 5**: Consistent hashing + topology awareness
+- **Phase 6**: Snapshot metadata, log compaction
+- **Phase 7**: HTTP/gRPC API for external clients
+- **Phase 8**: Eventually: MapReduce, data locality, distributed computing
+
+But stop after Phase 1. Don't skip ahead. Each phase's bottlenecks naturally motivate the next phase's design.
 
 ---
 
@@ -600,223 +746,3 @@ func makeServer(listenAddr string, nodes ...string) *FileServer {
 | Running without bootstrap nodes | Node starts but is isolated — Store/Get only works locally, no network effect | Always provide at least one known peer in `BootstrapNodes` |
 
 ---
-
-## 18. Nice to Haves — Improvements & Future Work
-
-These are ordered by impact and implementation difficulty. Items at the top provide the most value relative to effort.
-
----
-
-### 1. Fix the Get Synchronisation (Replace `time.Sleep`)
-
-**Priority: Critical — correctness bug**
-
-The `Get` method sleeps 500ms after broadcasting `MessageGetFile` and then reads from whatever peer happens to have responded. This is a race condition — slow networks miss the window entirely.
-
-**Fix:** Use a dedicated channel per inflight Get request:
-
-```go
-// In FileServer, maintain a map of inflight gets
-type getResult struct{ reader io.Reader }
-
-inflightGets map[string]chan getResult
-
-// In Get()
-ch := make(chan getResult, 1)
-s.inflightGets[hashKey(key)] = ch
-s.broadcast(msg)
-select {
-case result := <-ch:
-    return result.reader, nil
-case <-time.After(5 * time.Second):
-    return nil, fmt.Errorf("timeout: no peer has file %s", key)
-}
-```
-
----
-
-### 2. Fix the Encryption Bug in `handleMessageGetFile`
-
-**Priority: Critical — security bug**
-
-When a peer responds to a `MessageGetFile`, it sends the file via `io.Copy(peer, r)` — plaintext. But the requester decodes it with `store.WriteDecrypt(s.EncKey, ...)`. This means the written file is corrupted (decrypted gibberish written as if it were encrypted data).
-
-**Fix:** Change `handleMessageGetFile` to encrypt the response:
-
-```go
-// Before (broken):
-n, err := io.Copy(peer, r)
-
-// After (correct):
-n, err := copyEncrypt(s.EncKey, r, peer)
-```
-
----
-
-### 3. Replace MD5 Key Hashing with SHA-256
-
-**Priority: High — security hardening**
-
-`hashKey()` uses MD5 which is cryptographically broken. MD5 collisions can be produced in milliseconds with modern hardware — two different file keys could map to the same hash, causing a silent file collision on disk.
-
-**Fix:**
-```go
-func hashKey(key string) string {
-    hash := sha256.Sum256([]byte(key))
-    return hex.EncodeToString(hash[:])
-}
-```
-
----
-
-### 4. Add File Integrity Verification
-
-**Priority: High — data correctness**
-
-Currently a truncated or corrupt transfer is written to disk with no detection. Received files should be verified against a checksum included in the `MessageStoreFile` control message.
-
-**Fix:** Include a SHA-256 hash of the plaintext in `MessageStoreFile`. After `WriteDecrypt`, hash the written file and compare. Delete the file and return an error if they don't match.
-
----
-
-### 5. Add Replication Factor Control
-
-**Priority: High — scalability**
-
-The current design replicates to **every connected peer** — this becomes bandwidth-prohibitive at scale. Add a `ReplicationFactor int` to `FileServerOpts` and track which peers hold which keys.
-
-```go
-// In FileServerOpts
-ReplicationFactor int  // e.g. 3
-
-// In Store: pick n peers instead of all
-chosen := selectPeers(s.peers, s.ReplicationFactor)
-for _, peer := range chosen {
-    peer.Send(...)
-}
-```
-
-Pair this with a `FileIndex` — a map of `key → []peerAddr` — so that `Get` knows which specific peer to query rather than broadcasting.
-
----
-
-### 6. Add Node Failure Detection (Heartbeats)
-
-**Priority: High — reliability**
-
-Dead peers remain in the peer map forever. When a peer disconnects, all subsequent `Send` calls to it return errors that are currently silently swallowed. Add a heartbeat goroutine per peer and remove peers that fail to respond.
-
-```go
-// Periodic ping every 10s; remove peer on 3 consecutive failures
-go s.heartbeatLoop(peer)
-
-func (s *FileServer) heartbeatLoop(peer p2p.Peer) {
-    ticker := time.NewTicker(10 * time.Second)
-    fails := 0
-    for range ticker.C {
-        if err := peer.Send(pingBytes); err != nil {
-            fails++
-            if fails >= 3 {
-                s.removePeer(peer)
-                return
-            }
-        } else {
-            fails = 0
-        }
-    }
-}
-```
-
----
-
-### 7. Add File Chunking for Large Files
-
-**Priority: Medium — memory safety**
-
-`Store` buffers the entire file into a `bytes.Buffer` before broadcasting:
-```go
-fileBuffer = new(bytes.Buffer)
-tee = io.TeeReader(r, fileBuffer)
-```
-
-A 2GB video file would require 2GB of heap. Fix this by splitting files into fixed-size chunks (e.g. 1MB), streaming each chunk independently, and re-assembling on the receiver.
-
----
-
-### 8. Replace Full Broadcast with a DHT
-
-**Priority: Medium — scalability architecture**
-
-Every `Get` and `Store` broadcasts to all peers. At 100 nodes this means every operation triggers 99 simultaneous TCP messages. Replace the flat peer map with a Kademlia DHT: each node only talks to O(log n) peers to locate or route a file.
-
----
-
-### 9. Add an HTTP or gRPC API
-
-**Priority: Medium — usability**
-
-Right now the only entry point is `main.go`. Add a thin HTTP layer so the system can be used without writing Go code:
-
-```
-PUT  /files/{key}     ← body = file bytes
-GET  /files/{key}     ← returns file bytes
-DELETE /files/{key}   ← removes locally (and optionally notifies peers)
-GET  /peers           ← returns currently connected peers
-GET  /files           ← lists locally stored file keys
-```
-
----
-
-### 10. Stable Node Identity Across Restarts
-
-**Priority: Medium — operational**
-
-Node IDs are regenerated on every startup because `generateID()` uses `crypto/rand`. If a node restarts, all peers that cached its ID lose the association. Persist the ID to a `.nodeid` file in `StorageRoot` and reuse it on restart.
-
----
-
-### 11. Add Peer Authentication (TLS)
-
-**Priority: Medium — security**
-
-Any TCP client can connect and issue Store/Get commands. Wrap the TCP transport with `crypto/tls` using mutual certificate authentication, so only trusted nodes can join the network.
-
----
-
-### 12. Implement a File Listing / Metadata Index
-
-**Priority: Low — feature completeness**
-
-There is no way to discover what files exist in the network. Add a `FileIndex` structure (backed by a local BoltDB or SQLite) that maps `key → {peerAddr, size, storedAt}`. Expose it via `GET /files` over the HTTP API.
-
----
-
-### 13. Add Comprehensive Integration Tests
-
-**Priority: Low — quality**
-
-Unit tests cover crypto and the CAS store, but there are no network-level tests. Add an integration test that spins up 3 in-process nodes over loopback TCP, stores a file on one, and verifies retrieval on all others.
-
-```go
-func TestStoreAndGetAcrossNetwork(t *testing.T) {
-    s1 := makeTestServer(t, ":14000")
-    s2 := makeTestServer(t, ":14001", ":14000")
-    // ...
-    s3.Store("testkey", bytes.NewReader([]byte("hello world")))
-    time.Sleep(100 * time.Millisecond)
-    r, err := s1.Get("testkey")
-    // assert r content == "hello world"
-}
-```
-
----
-
-### 14. Add Observability (Metrics & Structured Logging)
-
-**Priority: Low — operational**
-
-The project uses raw `fmt.Printf` and `log.Println`. Replace with structured logging (`log/slog` in Go 1.21+) and add Prometheus metrics:
-- `dfs_bytes_stored_total`
-- `dfs_bytes_fetched_network_total`
-- `dfs_peer_count`
-- `dfs_get_latency_ms`
