@@ -564,7 +564,7 @@ s2 := makeServer(":7000", ":3000")      // bootstraps to s1
 s3 := makeServer(":5000", ":3000", ":7000") // bootstraps to s1 and s2
 
 func makeServer(listenAddr string, nodes ...string) *FileServer {
-    tcpOpts := p2p.TCPTransportOpts{
+    // tcpOpts := p2p.TCPTransportOpts{
         ListenAddr:    listenAddr,
         HandshakeFunc: p2p.NOPHandshakeFunc,
         Decoder:       p2p.DefaultDecoder{},

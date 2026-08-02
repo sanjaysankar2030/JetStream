@@ -13,7 +13,7 @@ type P2PServerOpts struct {
 	StorageRoot       string
 	PathTransformFunc storage.PathTransformFunc
 	Transport         p2p.Transport
-	BootStrapNodes []string
+	BootStrapNodes    []string
 }
 
 type P2PServer struct {
@@ -42,17 +42,33 @@ func (p *P2PServer) loop() {
 	for {
 		select {
 		case msg := <-p.P2PServerOpts.Transport.Consume():
-			fmt.Printf(" The Message Recieved is %s ", msg)
+			fmt.Printf(" The Message Recieved is %s  \n", msg)
 		case <-p.quitch:
 			return
 		}
 	}
 }
 
+func (p *P2PServer) bootStrapNetwork() error {
+	var err error
+	for _, addr := range p.BootStrapNodes {
+		go func(addr string, err error) {
+			fmt.Println("Attempting to connect with remote : ", addr)
+
+			if err := p.Transport.Dial(addr); err != nil {
+				log.Println("Dial Error | Addr :", addr)
+				log.Println("Error while Dialing in Bootstrap", err)
+			}
+		}(addr, err)
+	}
+	return err
+}
+
 func (p *P2PServer) Start() error {
 	if err := p.P2PServerOpts.Transport.ListenAndAccept(); err != nil {
 		return err
 	}
+	p.bootStrapNetwork()
 	p.loop()
 	return nil
 }

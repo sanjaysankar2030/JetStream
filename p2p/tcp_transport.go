@@ -80,6 +80,7 @@ func (t *TCPTransport) ListenAndAccept() error {
 func (t *TCPTransport) Dial(addr string) error {
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
+		// panic(err)
 		return err
 	}
 	go t.handleConn(conn, true)
@@ -96,7 +97,7 @@ func (t *TCPTransport) startAccepLoop() {
 		if err != nil {
 			fmt.Printf("Tcp accept error : %s\n", err)
 		} else {
-			fmt.Printf(" new incoming connection :  %+v\n ", conn)
+			fmt.Printf("New Port Ready to Accept :  %s\n ", conn.LocalAddr().String())
 			go t.handleConn(conn, false)
 		}
 	}
@@ -112,12 +113,12 @@ func (t *TCPTransport) handleConn(conn net.Conn, outbounds bool) {
 	}()
 
 	peer := NewTCPPeer(conn, outbounds)
-	log.Println("NewTCPPeer Established")
+	log.Println("NewTCPPeer Established", conn.LocalAddr().String())
 	// Checking whether the handshake is established
 	if err = t.HandShakeFunc(peer); err != nil {
 		return
 	}
-	log.Println("HandShake Established")
+	log.Println("HandShake Established", conn.LocalAddr().String())
 
 	if t.OnPeer != nil {
 		if err = t.OnPeer(peer); err != nil {
