@@ -10,7 +10,7 @@ import (
 // TCPPeer Represents a node over a 'tcp' connection
 type TCPPeer struct {
 	// conn => Connection of the represented node
-	conn net.Conn
+	net.Conn
 	// if we Dial a connection => outbound == true
 	// if we accept and retrieve a  connection => outbound == false
 	outbound bool
@@ -18,9 +18,19 @@ type TCPPeer struct {
 
 func NewTCPPeer(conn net.Conn, outbound bool) *TCPPeer {
 	return &TCPPeer{
-		conn:     conn,
+		Conn:     conn,
 		outbound: outbound,
 	}
+}
+
+// ReturnAddr() implements the Peer Interface
+func (p *TCPPeer) ReturnAddr() net.Addr {
+	return p.Conn.RemoteAddr()
+}
+
+func (p *TCPPeer) Send(b []byte) error {
+	_, err := p.Conn.Write(b)
+	return err
 }
 
 /*
@@ -28,7 +38,7 @@ Close() => conn.Close()
 Close() implements the Peer Interface
 */
 func (p *TCPPeer) ConnClose() error {
-	return p.conn.Close()
+	return p.Conn.Close()
 }
 
 func (p *TCPTransport) Close() error {
