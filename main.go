@@ -1,5 +1,6 @@
 package main
 
+// 05:14:45
 import (
 	"bytes"
 	"flag"
@@ -64,8 +65,9 @@ func main() {
 		go func() {
 			log.Fatal(s1.Start())
 		}()
-		time.Sleep(1 * time.Second)
+		time.Sleep(4 * time.Second)
 		go s2.Start()
+		time.Sleep(4 * time.Second)
 
 		data := bytes.NewReader([]byte("Hello Seamen"))
 		s2.StoreData("myPrivateData", data)

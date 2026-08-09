@@ -24,6 +24,11 @@ type Payload struct {
 	Data []byte
 }
 
+type Message struct {
+	From           string
+	messagePayload any
+}
+
 type P2PServer struct {
 	P2PServerOpts
 	peerLock sync.Mutex
@@ -61,16 +66,28 @@ func (p *P2PServer) loop() {
 	for {
 		select {
 		case msg := <-p.P2PServerOpts.Transport.Consume():
-			var p Payload
-			if err := gob.NewDecoder(bytes.NewReader(msg.Payload)).Decode(&p); err != nil {
+			var message Message
+			if err := gob.NewDecoder(bytes.NewReader(msg.Payload)).Decode(&message); err != nil {
 				fmt.Println("Error while packing the payload in loop()")
 				log.Fatal(err)
 			}
-			fmt.Printf(" The Message Recieved is %+v  \n", p)
+			if err := p.handlePayload(&message); err != nil {
+				log.Fatal(err)
+			}
+			// dataWritten := string(p.Data)
+			fmt.Printf(" The Message Recieved is %+v  \n", message.messagePayload)
+			// fmt.Printf(" The Data Recieved is %+v  \n", dataWritten)
 		case <-p.quitch:
 			return
 		}
 	}
+}
+func (p *P2PServer) handlePayload(m *Message) error {
+	switch v := m.messagePayload.(type) {
+	case *Payload:
+		fmt.Println("Recieved Payload", v)
+	}
+	return nil
 }
 
 func (p *P2PServer) bootStrapNetwork() error {
@@ -97,13 +114,13 @@ func (p *P2PServer) Start() error {
 	return nil
 }
 
-func (s *P2PServer) broadcast(p *Payload) error {
+func (s *P2PServer) broadcast(msg *Message) error {
 	broadcastNetwork := []io.Writer{}
 	for _, peer := range s.peers {
 		broadcastNetwork = append(broadcastNetwork, peer)
 	}
 	mw := io.MultiWriter(broadcastNetwork...)
-	return gob.NewEncoder(mw).Encode(p)
+	return gob.NewEncoder(mw).Encode(msg)
 }
 
 func (s *P2PServer) StoreData(key string, r io.Reader) error {
@@ -121,7 +138,10 @@ func (s *P2PServer) StoreData(key string, r io.Reader) error {
 		Data: tempBuff.Bytes(),
 	}
 
-	return s.broadcast(p)
+	return s.broadcast(&Message{
+		From:           "todo",
+		messagePayload: p,
+	})
 }
 
 func (p *P2PServer) Stop() {
