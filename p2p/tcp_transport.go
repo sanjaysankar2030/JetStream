@@ -9,7 +9,7 @@ import (
 
 // TCPPeer Represents a node over a 'tcp' connection
 type TCPPeer struct {
-	// conn => Connection of the represented node
+	// net.Conn implements io.Writer and io.Reader
 	net.Conn
 	// if we Dial a connection => outbound == true
 	// if we accept and retrieve a  connection => outbound == false

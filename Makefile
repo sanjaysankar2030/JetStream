@@ -6,3 +6,9 @@ run: build
 
 test:
 	go test ./... -v -run $(t)
+
+guiBuild:
+	go build -ldflags="-H windowsgui" -o bin/gui
+
+guiRun:guiBuild
+	@./bin/gui -gui

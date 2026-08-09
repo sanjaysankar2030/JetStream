@@ -2,5 +2,4 @@ package server
 
 import "testing"
 
-func TestInterface(t *testing.T) {
-}
+func TestInterface(t *testing.T) {}

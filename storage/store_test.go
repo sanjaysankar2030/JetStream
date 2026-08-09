@@ -34,12 +34,13 @@ func TestStoreDeleteKey(t *testing.T) {
 		t.Error(err)
 	}
 }
+
 func TestStore(t *testing.T) {
 	opts := StoreOpts{
 		PathTransformFunc: CASPathTrasformFunc,
 	}
 	s := NewStore(opts)
-	defer teardown(t, s)
+	// defer teardown(t, s)
 	for i := range 50 {
 		key := fmt.Sprintf("foo_%d", i)
 		// New Store Initialization
