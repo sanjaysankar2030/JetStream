@@ -50,9 +50,6 @@ func (ps *P2PServer) OnPeer(p p2p.Peer) error {
 	defer ps.peerLock.Unlock()
 	ps.peers[p.ReturnAddr().String()] = p
 	log.Println("Connected with the Remote Peer with Adress ", p.ReturnAddr().String(), "And Saved to peer map.")
-	// for addr, peer := range ps.peers {
-	// 	fmt.Printf("Current  Addr [%s] Peers [%+v] \n", addr, peer)
-	// }
 	return nil
 }
 
@@ -64,7 +61,12 @@ func (p *P2PServer) loop() {
 	for {
 		select {
 		case msg := <-p.P2PServerOpts.Transport.Consume():
-			fmt.Printf(" The Message Recieved is %s  \n", msg)
+			var p Payload
+			if err := gob.NewDecoder(bytes.NewReader(msg.Payload)).Decode(&p); err != nil {
+				fmt.Println("Error while packing the payload in loop()")
+				log.Fatal(err)
+			}
+			fmt.Printf(" The Message Recieved is %+v  \n", p)
 		case <-p.quitch:
 			return
 		}
@@ -105,16 +107,14 @@ func (s *P2PServer) broadcast(p *Payload) error {
 }
 
 func (s *P2PServer) StoreData(key string, r io.Reader) error {
-	if err := s.storage.Write(key, r); err != nil {
+
+	tempBuff := new(bytes.Buffer)
+	tee := io.TeeReader(r, tempBuff)
+	if err := s.storage.Write(key, tee); err != nil {
 		log.Println("Error while Writing to writer", err)
 		return err
 	}
-	tempBuff := new(bytes.Buffer)
-	if _, err := io.Copy(tempBuff, r); err != nil {
-		log.Println("Error while Copying ", err)
-		return err
-	}
-	log.Println("Bytes Written ", tempBuff)
+	fmt.Println("Bytes Written ", tempBuff.Bytes())
 
 	p := &Payload{
 		Key:  key,

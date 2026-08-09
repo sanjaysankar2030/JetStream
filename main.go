@@ -64,12 +64,13 @@ func main() {
 		go func() {
 			log.Fatal(s1.Start())
 		}()
+		time.Sleep(1 * time.Second)
 		go s2.Start()
 
-		time.Sleep(1 * time.Second)
 		data := bytes.NewReader([]byte("Hello Seamen"))
 		s2.StoreData("myPrivateData", data)
-		// guiStart()
+		select {}
+
 	}
 }
 func guiStart(addrList []string, nodesList []string) {
