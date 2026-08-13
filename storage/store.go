@@ -117,7 +117,9 @@ func (s *Store) writeStream(key string, r io.Reader) error {
 	if err != nil {
 		return err
 	}
-	log.Printf("written => (%d) to the disk in %s ", n, pathAndFullPath)
+	log.Println("------------------------------")
+	log.Printf("written => (%d) to the disk in %s \n", n, pathAndFullPath)
+	log.Println("------------------------------")
 	defer f.Close()
 	return nil
 }

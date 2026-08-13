@@ -20,6 +20,7 @@ func (dec GOBDecoder) Decode(r io.Reader, msg *RPC) error {
 
 type DefaultDecoder struct{}
 
+// We are gonna stream data directly to the file
 func (dec DefaultDecoder) Decode(r io.Reader, msg *RPC) error {
 	buf := make([]byte, 1028)
 	n, err := r.Read(buf)

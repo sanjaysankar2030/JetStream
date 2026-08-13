@@ -1,6 +1,7 @@
 package main
 
-// 05:14:45
+// 05:34:30
+// panic gets triggered in the p2pServer.loop() but did not trigger in our system
 import (
 	"bytes"
 	"flag"
@@ -72,9 +73,9 @@ func main() {
 		data := bytes.NewReader([]byte("Hello Seamen"))
 		s2.StoreData("myPrivateData", data)
 		select {}
-
 	}
 }
+
 func guiStart(addrList []string, nodesList []string) {
 	go func() {
 		viz := gui.NewNodeVisualization()
@@ -90,3 +91,7 @@ func guiStart(addrList []string, nodesList []string) {
 	}()
 	app.Main()
 }
+
+// Create a Window where it shows the details about the node when clicked it // Need Claude
+// Understand the code base and the know about the technologies used until now for interview
+// Start LLM gateway today make some initial commits for it

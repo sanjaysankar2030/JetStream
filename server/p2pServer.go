@@ -5,10 +5,12 @@ import (
 	"encoding/gob"
 	"fmt"
 	"io"
-	"jetstream/p2p"
-	"jetstream/storage"
 	"log"
 	"sync"
+	"time"
+
+	"jetstream/p2p"
+	"jetstream/storage"
 )
 
 type P2PServerOpts struct {
@@ -19,14 +21,9 @@ type P2PServerOpts struct {
 	BootStrapNodes    []string
 }
 
-type Payload struct {
-	Key  string
-	Data []byte
-}
-
 type Message struct {
 	From           string
-	messagePayload any
+	MessagePayload any
 }
 
 type P2PServer struct {
@@ -50,6 +47,7 @@ func NewP2PServer(opts P2PServerOpts) *P2PServer {
 		peers:         make(map[string]p2p.Peer),
 	}
 }
+
 func (ps *P2PServer) OnPeer(p p2p.Peer) error {
 	ps.peerLock.Lock()
 	defer ps.peerLock.Unlock()
@@ -65,30 +63,42 @@ func (p *P2PServer) loop() {
 	}()
 	for {
 		select {
-		case msg := <-p.P2PServerOpts.Transport.Consume():
-			var message Message
-			if err := gob.NewDecoder(bytes.NewReader(msg.Payload)).Decode(&message); err != nil {
+		case rpc := <-p.P2PServerOpts.Transport.Consume():
+			var msgBlock Message
+			if err := gob.NewDecoder(bytes.NewReader(rpc.Payload)).Decode(&msgBlock); err != nil {
 				fmt.Println("Error while packing the payload in loop()")
 				log.Fatal(err)
 			}
-			if err := p.handlePayload(&message); err != nil {
-				log.Fatal(err)
+			fmt.Printf(" The Message Recieved is %s  \n", string(msgBlock.MessagePayload.([]byte)))
+			peer, ok := p.peers[rpc.From]
+			if !ok {
+				panic("No peers in map peers")
 			}
+			fmt.Println(peer)
+			b := make([]byte, 1000)
+			if _, err := peer.Read(b); err != nil {
+				// log.Println("Error while reading the peer", err)
+				panic(err)
+			}
+			fmt.Println("Data that is Read() ", string(b))
+			// if err := p.handlePayload(&message); err != nil {
+			// 	log.Fatal(err)
+			// }
 			// dataWritten := string(p.Data)
-			fmt.Printf(" The Message Recieved is %+v  \n", message.messagePayload)
 			// fmt.Printf(" The Data Recieved is %+v  \n", dataWritten)
 		case <-p.quitch:
 			return
 		}
 	}
 }
-func (p *P2PServer) handlePayload(m *Message) error {
-	switch v := m.messagePayload.(type) {
-	case *Payload:
-		fmt.Println("Recieved Payload", v)
-	}
-	return nil
-}
+
+// func (p *P2PServer) handlePayload(m *Message) error {
+// 	switch v := m.messagePayload.(type) {
+// 	case *Payload:
+// 		fmt.Println("Recieved Payload", v)
+// 	}
+// 	return nil
+// }
 
 func (p *P2PServer) bootStrapNetwork() error {
 	var err error
@@ -124,24 +134,49 @@ func (s *P2PServer) broadcast(msg *Message) error {
 }
 
 func (s *P2PServer) StoreData(key string, r io.Reader) error {
-
-	tempBuff := new(bytes.Buffer)
-	tee := io.TeeReader(r, tempBuff)
-	if err := s.storage.Write(key, tee); err != nil {
-		log.Println("Error while Writing to writer", err)
+	buf := new(bytes.Buffer)
+	msg := Message{
+		MessagePayload: []byte("storagekey"),
+	}
+	if err := gob.NewEncoder(buf).Encode(msg); err != nil {
 		return err
 	}
-	fmt.Println("Bytes Written ", tempBuff.Bytes())
-
-	p := &Payload{
-		Key:  key,
-		Data: tempBuff.Bytes(),
+	for _, peer := range s.peers {
+		if err := peer.Send(buf.Bytes()); err != nil {
+			return err
+		}
 	}
 
-	return s.broadcast(&Message{
-		From:           "todo",
-		messagePayload: p,
-	})
+	time.Sleep(time.Second * 3)
+
+	payload := []byte("This is a large file")
+	for _, peer := range s.peers {
+		if err := peer.Send(payload); err != nil {
+			return err
+		}
+	}
+
+	return nil
+	// tempBuff := new(bytes.Buffer)
+	// tee := io.TeeReader(r, tempBuff)
+	// if err := s.storage.Write(key, tee); err != nil {
+	// 	log.Println("Error while Writing to writer", err)
+	// 	return err
+	// }
+
+	// fmt.Println("------------------------------")
+	// fmt.Println("Bytes Written ", tempBuff.Bytes())
+	// fmt.Println("------------------------------")
+
+	// p := &Payload{
+	// 	Key:  key,
+	// 	Data: tempBuff.Bytes(),
+	// }
+
+	// return s.broadcast(&Message{
+	// 	From:           "todo",
+	// 	messagePayload: p,
+	// })
 }
 
 func (p *P2PServer) Stop() {
