@@ -95,3 +95,4 @@ func guiStart(addrList []string, nodesList []string) {
 // Create a Window where it shows the details about the node when clicked it // Need Claude
 // Understand the code base and the know about the technologies used until now for interview
 // Start LLM gateway today make some initial commits for it
+// MapReduce
