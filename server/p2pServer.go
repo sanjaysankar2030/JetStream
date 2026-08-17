@@ -26,6 +26,10 @@ type Message struct {
 	MessagePayload any
 }
 
+type MessageStoreFile struct {
+	Key string
+}
+
 type P2PServer struct {
 	P2PServerOpts
 	peerLock sync.Mutex
@@ -33,6 +37,10 @@ type P2PServer struct {
 
 	storage *storage.Store
 	quitch  chan struct{}
+}
+
+func init() {
+	gob.Register(MessageStoreFile{})
 }
 
 func NewP2PServer(opts P2PServerOpts) *P2PServer {
@@ -68,24 +76,29 @@ func (p *P2PServer) loop() {
 			if err := gob.NewDecoder(bytes.NewReader(rpc.Payload)).Decode(&msgBlock); err != nil {
 				fmt.Println("Error while packing the payload in loop()")
 				log.Fatal(err)
+				return
 			}
-			fmt.Printf(" The Message Recieved is %s  \n", string(msgBlock.MessagePayload.([]byte)))
+			fmt.Printf(" The Message Recieved in the loop : %+v \n", msgBlock.MessagePayload)
+
 			peer, ok := p.peers[rpc.From]
 			if !ok {
 				panic("No peers in map peers")
 			}
-			fmt.Println(peer)
+			fmt.Println("Peer data in loop ()", peer)
+			log.Println("_____ This is the peer.Read() statement ________")
 			b := make([]byte, 1000)
-			if _, err := peer.Read(b); err != nil {
-				// log.Println("Error while reading the peer", err)
+			n, err := peer.Read(b)
+			if err != nil {
+				log.Println("Error while reading the peer", err)
 				panic(err)
 			}
-			fmt.Println("Data that is Read() ", string(b))
+			fmt.Println("Data that is Read() ", string(b[:n]))
 			// if err := p.handlePayload(&message); err != nil {
 			// 	log.Fatal(err)
 			// }
 			// dataWritten := string(p.Data)
 			// fmt.Printf(" The Data Recieved is %+v  \n", dataWritten)
+			peer.(*p2p.TCPPeer).Wg.Done()
 		case <-p.quitch:
 			return
 		}
@@ -136,8 +149,11 @@ func (s *P2PServer) broadcast(msg *Message) error {
 func (s *P2PServer) StoreData(key string, r io.Reader) error {
 	buf := new(bytes.Buffer)
 	msg := Message{
-		MessagePayload: []byte("storagekey"),
+		MessagePayload: MessageStoreFile{
+			Key: key,
+		},
 	}
+
 	if err := gob.NewEncoder(buf).Encode(msg); err != nil {
 		return err
 	}
@@ -160,8 +176,8 @@ func (s *P2PServer) StoreData(key string, r io.Reader) error {
 	// tempBuff := new(bytes.Buffer)
 	// tee := io.TeeReader(r, tempBuff)
 	// if err := s.storage.Write(key, tee); err != nil {
-	// 	log.Println("Error while Writing to writer", err)
-	// 	return err
+	// log.Println("Error while Writing to writer", err)
+	// return err
 	// }
 
 	// fmt.Println("------------------------------")
@@ -169,13 +185,13 @@ func (s *P2PServer) StoreData(key string, r io.Reader) error {
 	// fmt.Println("------------------------------")
 
 	// p := &Payload{
-	// 	Key:  key,
-	// 	Data: tempBuff.Bytes(),
+	// Key:  key,
+	// Data: tempBuff.Bytes(),
 	// }
 
 	// return s.broadcast(&Message{
-	// 	From:           "todo",
-	// 	messagePayload: p,
+	// From:           "todo",
+	// messagePayload: p,
 	// })
 }
 

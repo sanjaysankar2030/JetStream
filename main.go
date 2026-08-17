@@ -1,7 +1,7 @@
 package main
 
 // 05:34:30
-// panic gets triggered in the p2pServer.loop() but did not trigger in our system
+// The Key is sent sucesfully sent but data is not sent
 import (
 	"bytes"
 	"flag"
