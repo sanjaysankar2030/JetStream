@@ -84,6 +84,11 @@ func (p *P2PServer) loop() {
 			if !ok {
 				panic("No peers in map peers")
 			}
+			remote := peer.RemoteAddr()
+			if remote == nil {
+				panic("No addr is Read")
+			}
+			fmt.Println("Peer in RemoteAddr ()", peer.RemoteAddr().String())
 			fmt.Println("Peer data in loop ()", peer)
 			log.Println("_____ This is the peer.Read() statement ________")
 			b := make([]byte, 1000)
