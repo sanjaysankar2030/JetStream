@@ -162,6 +162,7 @@ func (s *P2PServer) StoreData(key string, r io.Reader) error {
 	if err := gob.NewEncoder(buf).Encode(msg); err != nil {
 		return err
 	}
+
 	for _, peer := range s.peers {
 		if err := peer.Send(buf.Bytes()); err != nil {
 			return err
@@ -170,7 +171,6 @@ func (s *P2PServer) StoreData(key string, r io.Reader) error {
 
 	time.Sleep(time.Second * 3)
 
-	// payload := []byte("This is a large file")
 
 	payload, err := io.ReadAll(r)
 	if err != nil {
@@ -183,6 +183,7 @@ func (s *P2PServer) StoreData(key string, r io.Reader) error {
 	}
 
 	return nil
+
 	// tempBuff := new(bytes.Buffer)
 	// tee := io.TeeReader(r, tempBuff)
 	// if err := s.storage.Write(key, tee); err != nil {

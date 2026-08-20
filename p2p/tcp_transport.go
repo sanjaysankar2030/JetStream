@@ -110,7 +110,7 @@ func (t *TCPTransport) startAccepLoop() {
 		if err != nil {
 			fmt.Printf("Tcp accept error : %s\n", err)
 		} else {
-			fmt.Printf("New Port Ready to Accept :  %s\n ", conn.LocalAddr().String())
+			log.Printf("New Port Ready to Accept :  %s\n ", conn.LocalAddr().String())
 			go t.handleConn(conn, false)
 		}
 	}
@@ -147,9 +147,9 @@ func (t *TCPTransport) handleConn(conn net.Conn, outbounds bool) {
 		}
 		rpc.From = conn.RemoteAddr().String()
 		peer.Wg.Add(1)
-		fmt.Println("Waiting till the streaming is done")
+		log.Println("Waiting till the streaming is done")
 		t.rpcch <- rpc
 		peer.Wg.Wait()
-		fmt.Println("Stream is done continuing the Reading /")
+		log.Println("Stream is done continuing the Reading /")
 	}
 }
