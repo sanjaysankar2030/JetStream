@@ -45,7 +45,6 @@ func main() {
 	// Default mode (headless)
 	addr1, nodes1, s1 := makeServer(":3000")
 	addr2, nodes2, s2 := makeServer(":4000", ":3000")
-
 	if *guiMode {
 
 		var addr []string
