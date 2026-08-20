@@ -9,12 +9,12 @@ import (
 	"log"
 	"time"
 
-	"jetstream/gui"
+	// "jetstream/gui"
+
 	"jetstream/p2p"
 	"jetstream/server"
 	"jetstream/storage"
-
-	"gioui.org/app"
+	// "gioui.org/app"
 )
 
 func makeServer(listenAddr string, nodes ...string) (string, []string, *server.P2PServer) {
@@ -77,19 +77,19 @@ func main() {
 }
 
 func guiStart(addrList []string, nodesList []string) {
-	go func() {
-		viz := gui.NewNodeVisualization()
-		for _, address := range addrList {
-			for _, node := range nodesList {
-				viz.AddNode(address, address, node)
-			}
-		}
+	// go func() {
+	// 	viz := gui.NewNodeVisualization()
+	// 	for _, address := range addrList {
+	// 		for _, node := range nodesList {
+	// 			viz.AddNode(address, address, node)
+	// 		}
+	// 	}
 
-		if err := viz.Run(); err != nil {
-			log.Fatal(err)
-		}
-	}()
-	app.Main()
+	// 	if err := viz.Run(); err != nil {
+	// 		log.Fatal(err)
+	// 	}
+	// }()
+	// app.Main()
 }
 
 // Create a Window where it shows the details about the node when clicked it // Need Claude

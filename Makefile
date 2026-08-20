@@ -1,4 +1,4 @@
-.PHONY: build run test guiBuild guiRun
+# .PHONY: build run test guiBuild guiRun
 
 build:
 	@go build -o bin/fs

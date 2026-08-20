@@ -170,7 +170,12 @@ func (s *P2PServer) StoreData(key string, r io.Reader) error {
 
 	time.Sleep(time.Second * 3)
 
-	payload := []byte("This is a large file")
+	// payload := []byte("This is a large file")
+
+	payload, err := io.ReadAll(r)
+	if err != nil {
+		log.Fatal("Error while Reading the payload data from the main.go")
+	}
 	for _, peer := range s.peers {
 		if err := peer.Send(payload); err != nil {
 			return err
