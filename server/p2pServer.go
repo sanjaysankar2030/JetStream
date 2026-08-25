@@ -78,45 +78,69 @@ func (p *P2PServer) loop() {
 				log.Fatal(err)
 				return
 			}
-			fmt.Printf(" The Message Recieved in the loop : %+v \n", msgBlock.MessagePayload)
 
-			peer, ok := p.peers[rpc.From]
-			if !ok {
-				panic("No peers in map peers")
+			if err:= p.handleMessage(rpc.From,&msgBlock); err != nil{
+				log.Fatal("Error whie handleMessage in loop()",err)
+				return
 			}
-			remote := peer.RemoteAddr()
-			if remote == nil {
-				panic("No addr is Read")
-			}
-			fmt.Println("Peer in RemoteAddr ()", peer.RemoteAddr().String())
-			fmt.Println("Peer data in loop ()", peer)
-			log.Println("_____ This is the peer.Read() statement ________")
-			b := make([]byte, 1000)
-			n, err := peer.Read(b)
-			if err != nil {
-				log.Println("Error while reading the peer", err)
-				panic(err)
-			}
-			fmt.Println("Data that is Read() ", string(b[:n]))
-			// if err := p.handlePayload(&message); err != nil {
-			// 	log.Fatal(err)
-			// }
-			// dataWritten := string(p.Data)
-			// fmt.Printf(" The Data Recieved is %+v  \n", dataWritten)
-			peer.(*p2p.TCPPeer).Wg.Done()
+			//fmt.Printf(" The Message Recieved in the loop : %+v \n", msgBlock.MessagePayload)
+
+			//peer, ok := p.peers[rpc.From]
+
+			//if !ok {
+			//	log.Println("No peers in map peers")
+			//}
+
+			//remote := peer.RemoteAddr()
+
+			//if remote == nil {
+			//	log.Println("No addr is Read")
+			//}
+
+			//fmt.Println("Peer in RemoteAddr ()", peer.RemoteAddr().String())
+			//fmt.Println("Peer data in loop ()", peer)
+			//log.Println("_____ This is the peer.Read() statement ________")
+			//b := make([]byte, 1000)
+			//n, err := peer.Read(b)
+			//if err != nil {
+			//	log.Fatalln("Error while reading the peer", err)
+			//}
+			//fmt.Println("Data that is Read() ", string(b[:n]))
+			//// if err := p.handlePayload(&message); err != nil {
+			//// 	log.Fatal(err)
+			//// }
+			//// dataWritten := string(p.Data)
+			//// fmt.Printf(" The Data Recieved is %+v  \n", dataWritten)
+			//// TODO: What if we dont want TCPPeer and we want the peer to be UDPPeer
+			//peer.(*p2p.TCPPeer).Wg.Done()
 		case <-p.quitch:
 			return
 		}
 	}
 }
 
-// func (p *P2PServer) handlePayload(m *Message) error {
-// 	switch v := m.messagePayload.(type) {
-// 	case *Payload:
-// 		fmt.Println("Recieved Payload", v)
-// 	}
-// 	return nil
-// }
+func (p *P2PServer) handleMessage(from string, m *Message) error {
+	switch v := m.MessagePayload.(type) {
+	case MessageStoreFile:
+		return p.handleMessageStoreFile(from, v)
+	}
+	return nil
+ }
+
+func (p *P2PServer) handleMessageStoreFile(from string , msg MessageStoreFile ) error {
+	peer, ok := p.peers[from]
+	if !ok {
+		log.Println("No peers in map peers")
+	}
+	if err := p.storage.Write(msg.Key,peer); err != nil{
+		log.Fatal("Error while writing the data of peer to disk in handleMessageStoreFile()")
+		return err
+	}
+
+	peer.(*p2p.TCPPeer).Wg.Done()
+	return nil
+}
+
 
 func (p *P2PServer) bootStrapNetwork() error {
 	var err error
