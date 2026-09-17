@@ -1,6 +1,7 @@
 # Distributed File System in Go — Complete Project Reference
 
 ---
+https://github.com/rohitg00/ai-engineering-from-scratch/tree/main/phases/14-agent-engineering/54-build-the-feedback-ratchet.git
 
 ## Table of Contents
 
@@ -820,3 +821,7 @@ The project uses raw `fmt.Printf` and `log.Println`. Replace with structured log
 - `dfs_bytes_fetched_network_total`
 - `dfs_peer_count`
 - `dfs_get_latency_ms`
+
+
+### Things to keep  in mind
+- The mapreduce job should be run in the same node which stores the data for maximum efficency

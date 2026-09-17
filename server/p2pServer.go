@@ -2,238 +2,509 @@ package server
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/gob"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"sync"
 	"time"
 
+	"jetstream/crypto"
 	"jetstream/p2p"
 	"jetstream/storage"
 )
 
-type P2PServerOpts struct {
-	ListenAddr        string
+func init() {
+	gob.Register(MessageStoreFile{})
+	gob.Register(MessageGetFile{})
+}
+
+// MessageStoreFile is sent before streaming an encrypted file to peers.
+type MessageStoreFile struct {
+	ID   string // Sender node ID (used for namespacing)
+	Key  string // Hashed key of the file
+	Size int64  // Encrypted file size in bytes (plaintext size + 16 for IV)
+}
+
+// MessageGetFile is broadcast to query peers for a file.
+type MessageGetFile struct {
+	ID  string // Requesting node ID
+	Key string // Hashed key of the file
+}
+
+// Message is the gob-encoded protocol envelope.
+type Message struct {
+	Payload any
+}
+
+// FileServerOpts defines the configuration for a FileServer node.
+type FileServerOpts struct {
+	ID                string
+	EncKey            []byte
 	StorageRoot       string
 	PathTransformFunc storage.PathTransformFunc
 	Transport         p2p.Transport
-	BootStrapNodes    []string
+	BootstrapNodes    []string
 }
 
-type Message struct {
-	From           string
-	MessagePayload any
-}
+// P2PServerOpts is an alias for FileServerOpts.
+type P2PServerOpts = FileServerOpts
 
-type MessageStoreFile struct {
-	Key string
-}
+// DefaultFileServer implements the distributed FileServer node.
+type DefaultFileServer struct {
+	FileServerOpts
 
-type P2PServer struct {
-	P2PServerOpts
-	peerLock sync.Mutex
+	peerLock sync.RWMutex
 	peers    map[string]p2p.Peer
 
 	storage *storage.Store
 	quitch  chan struct{}
+
+	pendingLock  sync.Mutex
+	pendingStore map[string]MessageStoreFile // maps remoteAddr -> MessageStoreFile
+
+	inflightLock sync.Mutex
+	inflightGets map[string]chan struct{} // maps hashedKey -> channel
 }
 
-func init() {
-	gob.Register(MessageStoreFile{})
-}
+// FileServer alias
+type P2PServer = DefaultFileServer
 
-func NewP2PServer(opts P2PServerOpts) *P2PServer {
+// NewFileServer constructs a new FileServer node.
+func NewFileServer(opts FileServerOpts) *DefaultFileServer {
+	if len(opts.ID) == 0 {
+	
+	opts.ID = crypto.GenerateID()
+	}
+	if len(opts.EncKey) == 0 {
+		opts.EncKey = crypto.NewEncryptionKey()
+	} else if len(opts.EncKey) != 32 {
+		panic(fmt.Sprintf("FileServer: EncKey must be exactly 32 bytes (got %d)", len(opts.EncKey)))
+	}
+	if len(opts.StorageRoot) == 0 {
+		opts.StorageRoot = "dfs_network"
+	}
+	if opts.PathTransformFunc == nil {
+		opts.PathTransformFunc = storage.CASPathTransformFunc
+	}
+
 	storeOpts := storage.StoreOpts{
 		Root:              opts.StorageRoot,
 		PathTransformFunc: opts.PathTransformFunc,
 	}
-	return &P2PServer{
-		P2PServerOpts: opts,
-		storage:       storage.NewStore(storeOpts),
-		quitch:        make(chan struct{}),
-		peers:         make(map[string]p2p.Peer),
+
+	fs := &DefaultFileServer{
+		FileServerOpts: opts,
+		storage:        storage.NewStore(storeOpts),
+		quitch:         make(chan struct{}),
+		peers:          make(map[string]p2p.Peer),
+		pendingStore:   make(map[string]MessageStoreFile),
+		inflightGets:   make(map[string]chan struct{}),
 	}
+
+	if tcpTr, ok := opts.Transport.(*p2p.TCPTransport); ok {
+		tcpTr.OnPeer = fs.OnPeer
+		tcpTr.OnPeerDisconnect = fs.OnPeerDisconnect
+	}
+
+	return fs
 }
 
-func (ps *P2PServer) OnPeer(p p2p.Peer) error {
-	ps.peerLock.Lock()
-	defer ps.peerLock.Unlock()
-	ps.peers[p.ReturnAddr().String()] = p
-	log.Println("Connected with the Remote Peer with Adress ", p.ReturnAddr().String(), "And Saved to peer map.")
+// NewP2PServer alias for NewFileServer.
+func NewP2PServer(opts P2PServerOpts) *DefaultFileServer {
+	return NewFileServer(opts)
+}
+
+// OnPeer is invoked when a remote peer successfully connects.
+func (s *DefaultFileServer) OnPeer(p p2p.Peer) error {
+	s.peerLock.Lock()
+	defer s.peerLock.Unlock()
+	addr := p.RemoteAddr().String()
+	s.peers[addr] = p
+	log.Printf("[%s] Connected to peer: %s\n", s.shortID(), addr)
 	return nil
 }
 
-func (p *P2PServer) loop() {
-	defer func() {
-		log.Printf("Server Closed due to the quitch in P2PServer invoked ")
-		p.Transport.Close()
-	}()
-	for {
-		select {
-		case rpc := <-p.P2PServerOpts.Transport.Consume():
-			var msgBlock Message
-			if err := gob.NewDecoder(bytes.NewReader(rpc.Payload)).Decode(&msgBlock); err != nil {
-				fmt.Println("Error while packing the payload in loop()")
-				log.Fatal(err)
-				return
-			}
+// OnPeerDisconnect cleans up dead peers when they disconnect.
+func (s *DefaultFileServer) OnPeerDisconnect(p p2p.Peer) {
+	s.peerLock.Lock()
+	defer s.peerLock.Unlock()
+	addr := p.RemoteAddr().String()
+	delete(s.peers, addr)
 
-			if err:= p.handleMessage(rpc.From,&msgBlock); err != nil{
-				log.Fatal("Error whie handleMessage in loop()",err)
-				return
-			}
-			//fmt.Printf(" The Message Recieved in the loop : %+v \n", msgBlock.MessagePayload)
+	s.pendingLock.Lock()
+	delete(s.pendingStore, addr)
+	s.pendingLock.Unlock()
 
-			//peer, ok := p.peers[rpc.From]
-
-			//if !ok {
-			//	log.Println("No peers in map peers")
-			//}
-
-			//remote := peer.RemoteAddr()
-
-			//if remote == nil {
-			//	log.Println("No addr is Read")
-			//}
-
-			//fmt.Println("Peer in RemoteAddr ()", peer.RemoteAddr().String())
-			//fmt.Println("Peer data in loop ()", peer)
-			//log.Println("_____ This is the peer.Read() statement ________")
-			//b := make([]byte, 1000)
-			//n, err := peer.Read(b)
-			//if err != nil {
-			//	log.Fatalln("Error while reading the peer", err)
-			//}
-			//fmt.Println("Data that is Read() ", string(b[:n]))
-			//// if err := p.handlePayload(&message); err != nil {
-			//// 	log.Fatal(err)
-			//// }
-			//// dataWritten := string(p.Data)
-			//// fmt.Printf(" The Data Recieved is %+v  \n", dataWritten)
-			//// TODO: What if we dont want TCPPeer and we want the peer to be UDPPeer
-			//peer.(*p2p.TCPPeer).Wg.Done()
-		case <-p.quitch:
-			return
-		}
-	}
+	log.Printf("[%s] Peer disconnected and removed: %s\n", s.shortID(), addr)
 }
 
-func (p *P2PServer) handleMessage(from string, m *Message) error {
-	switch v := m.MessagePayload.(type) {
-	case MessageStoreFile:
-		return p.handleMessageStoreFile(from, v)
-	}
-	return nil
- }
+func (s *DefaultFileServer) getPeer(addr string) (p2p.Peer, bool) {
+	s.peerLock.RLock()
+	defer s.peerLock.RUnlock()
+	p, ok := s.peers[addr]
+	return p, ok
+}
 
-func (p *P2PServer) handleMessageStoreFile(from string , msg MessageStoreFile ) error {
-	peer, ok := p.peers[from]
-	if !ok {
-		log.Println("No peers in map peers")
-	}
-	if err := p.storage.Write(msg.Key,peer); err != nil{
-		log.Fatal("Error while writing the data of peer to disk in handleMessageStoreFile()")
+// Start begins listening, bootstraps to peers, and enters the message processing loop.
+func (s *DefaultFileServer) Start() error {
+	if err := s.Transport.ListenAndAccept(); err != nil {
 		return err
 	}
-
-	peer.(*p2p.TCPPeer).Wg.Done()
+	s.bootstrapNetwork()
+	s.loop()
 	return nil
 }
 
+// Stop shuts down the server.
+func (s *DefaultFileServer) Stop() {
+	select {
+	case <-s.quitch:
+	default:
+		close(s.quitch)
+	}
+	s.Transport.Close()
+}
 
-func (p *P2PServer) bootStrapNetwork() error {
-	var err error
-	for _, addr := range p.BootStrapNodes {
-		go func(addr string, err error) {
-			fmt.Println("Attempting to connect with remote : ", addr)
+// Close implements FileServer.
+func (s *DefaultFileServer) Close() {
+	s.Stop()
+}
 
-			if err := p.Transport.Dial(addr); err != nil {
-				log.Println("Dial Error | Addr :", addr)
-				log.Println("Error while Dialing in Bootstrap", err)
+func (s *DefaultFileServer) bootstrapNetwork() {
+	for _, addr := range s.BootstrapNodes {
+		go func(addr string) {
+			log.Printf("[%s] Dialing bootstrap node: %s\n", s.shortID(), addr)
+			if err := s.Transport.Dial(addr); err != nil {
+				log.Printf("[%s] Failed to dial bootstrap node %s: %v\n", s.shortID(), addr, err)
 			}
-		}(addr, err)
+		}(addr)
 	}
-	return err
 }
 
-func (p *P2PServer) Start() error {
-	if err := p.P2PServerOpts.Transport.ListenAndAccept(); err != nil {
-		return err
-	}
-	p.bootStrapNetwork()
-	p.loop()
-	return nil
-}
-
-func (s *P2PServer) broadcast(msg *Message) error {
-	broadcastNetwork := []io.Writer{}
-	for _, peer := range s.peers {
-		broadcastNetwork = append(broadcastNetwork, peer)
-	}
-	mw := io.MultiWriter(broadcastNetwork...)
-	return gob.NewEncoder(mw).Encode(msg)
-}
-
-func (s *P2PServer) StoreData(key string, r io.Reader) error {
+func (s *DefaultFileServer) sendMsg(peer p2p.Peer, msg *Message) error {
 	buf := new(bytes.Buffer)
-	msg := Message{
-		MessagePayload: MessageStoreFile{
-			Key: key,
-		},
-	}
-
 	if err := gob.NewEncoder(buf).Encode(msg); err != nil {
 		return err
 	}
+	if err := peer.Send([]byte{p2p.IncomingMessage}); err != nil {
+		return err
+	}
+	length := int32(buf.Len())
+	if err := binary.Write(peer, binary.BigEndian, length); err != nil {
+		return err
+	}
+	return peer.Send(buf.Bytes())
+}
 
+func (s *DefaultFileServer) broadcast(msg *Message) error {
+	s.peerLock.RLock()
+	peers := make([]p2p.Peer, 0, len(s.peers))
 	for _, peer := range s.peers {
-		if err := peer.Send(buf.Bytes()); err != nil {
-			return err
+		peers = append(peers, peer)
+	}
+	s.peerLock.RUnlock()
+
+	for _, peer := range peers {
+		if err := s.sendMsg(peer, msg); err != nil {
+			log.Printf("[%s] Broadcast error to %s: %v\n", s.shortID(), peer.RemoteAddr(), err)
 		}
 	}
+	return nil
+}
 
-	time.Sleep(time.Second * 3)
+// Store writes the file to local storage and broadcasts the encrypted file to all connected peers.
+func (s *DefaultFileServer) Store(key string, r io.Reader) error {
+	hashedKey := crypto.HashKey(key)
 
-
-	payload, err := io.ReadAll(r)
+	// Step 1: Write file to local disk under hashedKey
+	fileBuffer := new(bytes.Buffer)
+	tee := io.TeeReader(r, fileBuffer)
+	size, err := s.storage.Write(s.ID, hashedKey, tee)
 	if err != nil {
-		log.Fatal("Error while Reading the payload data from the main.go")
+		return fmt.Errorf("store local write error: %w", err)
 	}
+
+	// Step 2: Broadcast control message to all connected peers
+	s.peerLock.RLock()
+	peers := make([]p2p.Peer, 0, len(s.peers))
 	for _, peer := range s.peers {
-		if err := peer.Send(payload); err != nil {
-			return err
+		peers = append(peers, peer)
+	}
+	s.peerLock.RUnlock()
+
+	if len(peers) == 0 {
+		return nil
+	}
+
+	msg := &Message{
+		Payload: MessageStoreFile{
+			ID:   s.ID,
+			Key:  hashedKey,
+			Size: size + 16, // plaintext size + 16 bytes IV
+		},
+	}
+
+	for _, peer := range peers {
+		if err := s.sendMsg(peer, msg); err != nil {
+			log.Printf("[%s] Error sending MessageStoreFile to %s: %v\n", s.shortID(), peer.RemoteAddr(), err)
 		}
+	}
+
+	// Step 3: Stream encrypted file bytes to all peers simultaneously
+	writers := make([]io.Writer, len(peers))
+	for i, peer := range peers {
+		if err := peer.Send([]byte{p2p.IncomingStream}); err != nil {
+			log.Printf("[%s] Error sending IncomingStream to %s: %v\n", s.shortID(), peer.RemoteAddr(), err)
+		}
+		writers[i] = peer
+	}
+
+	mw := io.MultiWriter(writers...)
+	if _, err := crypto.CopyEncrypt(s.EncKey, fileBuffer, mw); err != nil {
+		return fmt.Errorf("broadcast encrypt error: %w", err)
 	}
 
 	return nil
-
-	// tempBuff := new(bytes.Buffer)
-	// tee := io.TeeReader(r, tempBuff)
-	// if err := s.storage.Write(key, tee); err != nil {
-	// log.Println("Error while Writing to writer", err)
-	// return err
-	// }
-
-	// fmt.Println("------------------------------")
-	// fmt.Println("Bytes Written ", tempBuff.Bytes())
-	// fmt.Println("------------------------------")
-
-	// p := &Payload{
-	// Key:  key,
-	// Data: tempBuff.Bytes(),
-	// }
-
-	// return s.broadcast(&Message{
-	// From:           "todo",
-	// messagePayload: p,
-	// })
 }
 
-func (p *P2PServer) Stop() {
-	close(p.quitch)
+// StoreData is an alias for Store.
+func (s *DefaultFileServer) StoreData(key string, r io.Reader) error {
+	return s.Store(key, r)
 }
 
-func (s *P2PServer) Close() {
-	close(s.quitch)
+// Get retrieves a file by key, serving from local disk if available, or fetching and caching from the network.
+func (s *DefaultFileServer) Get(key string) (io.Reader, error) {
+	hashedKey := crypto.HashKey(key)
+
+	// Check local storage under raw key and hashed key
+	if s.storage.Has(s.ID, key) {
+		log.Printf("[%s] Serving file '%s' from local storage\n", s.shortID(), key)
+		_, r, err := s.storage.Read(s.ID, key)
+		return r, err
+	}
+	if s.storage.Has(s.ID, hashedKey) {
+		log.Printf("[%s] Serving file '%s' (hash: %s) from local storage\n", s.shortID(), key, hashedKey)
+		_, r, err := s.storage.Read(s.ID, hashedKey)
+		return r, err
+	}
+
+	// Register in-flight Get channel
+	ch := make(chan struct{}, 1)
+	s.inflightLock.Lock()
+	s.inflightGets[hashedKey] = ch
+	s.inflightLock.Unlock()
+
+	defer func() {
+		s.inflightLock.Lock()
+		delete(s.inflightGets, hashedKey)
+		s.inflightLock.Unlock()
+	}()
+
+	// Broadcast MessageGetFile to all peers
+	msg := &Message{
+		Payload: MessageGetFile{
+			ID:  s.ID,
+			Key: hashedKey,
+		},
+	}
+	if err := s.broadcast(msg); err != nil {
+		return nil, fmt.Errorf("broadcast get request error: %w", err)
+	}
+
+	// Channel-based synchronization replacing fragile sleep (Nice-to-Have #1)
+	select {
+	case <-ch:
+		_, r, err := s.storage.Read(s.ID, hashedKey)
+		if err != nil {
+			return nil, err
+		}
+		return r, nil
+	case <-time.After(5 * time.Second):
+		return nil, fmt.Errorf("timeout: file '%s' not found across network", key)
+	case <-s.quitch:
+		return nil, errors.New("server stopped")
+	}
+}
+
+func (s *DefaultFileServer) loop() {
+	defer func() {
+		log.Printf("[%s] Server loop terminated\n", s.shortID())
+	}()
+
+	for {
+		select {
+		case <-s.quitch:
+			return
+		case rpc, ok := <-s.Transport.Consume():
+			if !ok {
+				return
+			}
+			if rpc.Stream {
+				if err := s.handleStream(rpc.From); err != nil {
+					log.Printf("[%s] handleStream error from %s: %v\n", s.shortID(), rpc.From, err)
+				}
+			} else {
+				var msg Message
+				if err := gob.NewDecoder(bytes.NewReader(rpc.Payload)).Decode(&msg); err != nil {
+					log.Printf("[%s] gob decode error from %s: %v\n", s.shortID(), rpc.From, err)
+					continue
+				}
+				if err := s.handleMessage(rpc.From, &msg); err != nil {
+					log.Printf("[%s] handleMessage error from %s: %v\n", s.shortID(), rpc.From, err)
+				}
+			}
+		}
+	}
+}
+
+func (s *DefaultFileServer) handleMessage(from string, msg *Message) error {
+	switch v := msg.Payload.(type) {
+	case MessageStoreFile:
+		return s.handleMessageStoreFile(from, v)
+	case MessageGetFile:
+		return s.handleMessageGetFile(from, v)
+	default:
+		return fmt.Errorf("unknown message type: %T", v)
+	}
+}
+
+func (s *DefaultFileServer) handleMessageStoreFile(from string, msg MessageStoreFile) error {
+	s.pendingLock.Lock()
+	s.pendingStore[from] = msg
+	s.pendingLock.Unlock()
+	return nil
+}
+
+func (s *DefaultFileServer) handleMessageGetFile(from string, msg MessageGetFile) error {
+	peer, ok := s.getPeer(from)
+	if !ok {
+		return fmt.Errorf("peer %s not found in peer map", from)
+	}
+
+	targetKey := msg.Key
+	var targetID string
+
+	// Check if this node has the requested file under local ID or msg.ID
+	if s.storage.Has(s.ID, targetKey) {
+		targetID = s.ID
+	} else if s.storage.Has(msg.ID, targetKey) {
+		targetID = msg.ID
+	} else {
+		// File not stored on this node
+		return nil
+	}
+
+	fileSize, r, err := s.storage.Read(targetID, targetKey)
+	if err != nil {
+		return err
+	}
+	if rc, ok := r.(io.Closer); ok {
+		defer rc.Close()
+	}
+
+	// 1. Signal IncomingStream
+	if err := peer.Send([]byte{p2p.IncomingStream}); err != nil {
+		return err
+	}
+
+	// 2. Send key length and key header
+	keyBytes := []byte(targetKey)
+	keyLen := int16(len(keyBytes))
+	if err := binary.Write(peer, binary.LittleEndian, keyLen); err != nil {
+		return err
+	}
+	if err := peer.Send(keyBytes); err != nil {
+		return err
+	}
+
+	// 3. Send encrypted file size (fileSize + 16 for IV)
+	encSize := fileSize + 16
+	if err := binary.Write(peer, binary.LittleEndian, encSize); err != nil {
+		return err
+	}
+
+	// 4. Stream encrypted file bytes (Fixes encryption bug in handleMessageGetFile)
+	_, err = crypto.CopyEncrypt(s.EncKey, r, peer)
+	return err
+}
+
+func (s *DefaultFileServer) handleStream(from string) error {
+	peer, ok := s.getPeer(from)
+	if !ok {
+		return fmt.Errorf("peer %s not found for incoming stream", from)
+	}
+
+	s.pendingLock.Lock()
+	pending, isStore := s.pendingStore[from]
+	if isStore {
+		delete(s.pendingStore, from)
+	}
+	s.pendingLock.Unlock()
+
+	if isStore {
+		defer peer.CloseStream()
+		// Store under local s.ID so this node's CAS store owns the file
+		n, err := s.storage.WriteDecrypt(s.EncKey, s.ID, pending.Key, io.LimitReader(peer, pending.Size))
+		if err != nil {
+			return fmt.Errorf("failed to write decrypted stream to disk: %w", err)
+		}
+		log.Printf("[%s] Stored %d bytes from %s (key: %s)\n", s.shortID(), n, from, pending.Key)
+		return nil
+	}
+
+	// Otherwise, this stream is a response to an in-flight Get request
+	return s.handleGetStream(peer)
+}
+
+func (s *DefaultFileServer) handleGetStream(peer p2p.Peer) error {
+	defer peer.CloseStream()
+
+	var keyLen int16
+	if err := binary.Read(peer, binary.LittleEndian, &keyLen); err != nil {
+		return err
+	}
+	keyBuf := make([]byte, keyLen)
+	if _, err := io.ReadFull(peer, keyBuf); err != nil {
+		return err
+	}
+	hashedKey := string(keyBuf)
+
+	var encSize int64
+	if err := binary.Read(peer, binary.LittleEndian, &encSize); err != nil {
+		return err
+	}
+
+	s.inflightLock.Lock()
+	ch, waiting := s.inflightGets[hashedKey]
+	s.inflightLock.Unlock()
+
+	if !waiting {
+		// Discard redundant or late stream
+		_, err := io.CopyN(io.Discard, peer, encSize)
+		return err
+	}
+
+	// Decrypt and write to local disk under s.ID
+	n, err := s.storage.WriteDecrypt(s.EncKey, s.ID, hashedKey, io.LimitReader(peer, encSize))
+	if err != nil {
+		return fmt.Errorf("failed to write decrypted get stream: %w", err)
+	}
+	log.Printf("[%s] Received Get response for key '%s' (%d bytes)\n", s.shortID(), hashedKey, n)
+
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
+
+	return nil
+}
+
+func (s *DefaultFileServer) shortID() string {
+	if len(s.ID) > 8 {
+		return s.ID[:8]
+	}
+	return s.ID
 }

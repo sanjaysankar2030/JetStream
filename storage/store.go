@@ -1,13 +1,13 @@
 package storage
 
 import (
-	"bytes"
 	"errors"
-	"fmt"
 	"io"
-	"log"
 	"os"
+	"path/filepath"
 	"strings"
+
+	"jetstream/crypto"
 )
 
 const defaultRoot string = "stream"
@@ -20,15 +20,15 @@ type PathKey struct {
 }
 
 func (p PathKey) FullPath() string {
-	return fmt.Sprintf("%s/%s", p.PathName, p.Filename)
+	return filepath.ToSlash(filepath.Join(p.PathName, p.Filename))
 }
 
 func (p PathKey) FirstPathName() string {
-	path := strings.Split(p.PathName, "/")
-	if len(path) == 0 {
+	parts := strings.Split(filepath.ToSlash(p.PathName), "/")
+	if len(parts) == 0 {
 		return ""
 	}
-	return path[0]
+	return parts[0]
 }
 
 func DefaultPathTransformFunc(key string) PathKey {
@@ -58,68 +58,88 @@ func NewStore(opts StoreOpts) *Store {
 		StoreOpts: opts,
 	}
 }
-func (s *Store) Write(key string, r io.Reader) error {
-	return s.writeStream(key, r)
+
+func (s *Store) pathFor(id, subpath string) string {
+	if len(id) == 0 {
+		return filepath.Join(s.Root, filepath.FromSlash(subpath))
+	}
+	return filepath.Join(s.Root, id, filepath.FromSlash(subpath))
 }
 
-func (s *Store) Read(key string) (io.Reader, error) {
-	f, err := s.readStream(key)
+// Has checks if the file exists on disk under root/<id>/<pathKey>.
+func (s *Store) Has(id, key string) bool {
+	pathKey := s.PathTransformFunc(key)
+	fullPath := s.pathFor(id, pathKey.FullPath())
+	_, err := os.Stat(fullPath)
+	return !errors.Is(err, os.ErrNotExist) && err == nil
+}
+
+// Write writes raw bytes from reader to disk under root/<id>/<pathKey>.
+// Returns the number of bytes written.
+func (s *Store) Write(id, key string, r io.Reader) (int64, error) {
+	pathKey := s.PathTransformFunc(key)
+	dirPath := s.pathFor(id, pathKey.PathName)
+	if err := os.MkdirAll(dirPath, os.ModePerm); err != nil {
+		return 0, err
+	}
+
+	fullPath := s.pathFor(id, pathKey.FullPath())
+	f, err := os.Create(fullPath)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 	defer f.Close()
-	buf := new(bytes.Buffer)
-	_, err = io.Copy(buf, f)
 
-	return buf, err
+	return io.Copy(f, r)
 }
 
-func (s *Store) readStream(key string) (io.ReadCloser, error) {
+// WriteDecrypt decrypts AES-CTR encrypted stream from r and writes plaintext to disk.
+// Returns the number of plaintext bytes written.
+func (s *Store) WriteDecrypt(encKey []byte, id, key string, r io.Reader) (int64, error) {
 	pathKey := s.PathTransformFunc(key)
-	return os.Open(s.Root + "/" + pathKey.FullPath())
-}
-
-func (s *Store) Delete(key string) error {
-	fmt.Println("Called the Delete Method")
-	pathKey := s.PathTransformFunc(key)
-	defer func() {
-		log.Printf("deleted [%s ]this from the folder", s.Root+"/"+pathKey.FirstPathName())
-	}()
-	return os.RemoveAll(s.Root + "/" + pathKey.FirstPathName())
-}
-
-func (s *Store) Has(key string) bool {
-	fmt.Println("Called the Has Method -> *Store")
-	pathKey := s.PathTransformFunc(key)
-	_, err := os.Stat(s.Root + "/" + pathKey.FullPath())
-	if errors.Is(err, os.ErrNotExist) {
-		return false
+	dirPath := s.pathFor(id, pathKey.PathName)
+	if err := os.MkdirAll(dirPath, os.ModePerm); err != nil {
+		return 0, err
 	}
-	return true
+
+	fullPath := s.pathFor(id, pathKey.FullPath())
+	f, err := os.Create(fullPath)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+
+	return crypto.CopyDecrypt(encKey, r, f)
 }
 
+// Read opens the file under root/<id>/<pathKey> and returns its size and reader.
+func (s *Store) Read(id, key string) (int64, io.Reader, error) {
+	pathKey := s.PathTransformFunc(key)
+	fullPath := s.pathFor(id, pathKey.FullPath())
+	f, err := os.Open(fullPath)
+	if err != nil {
+		return 0, nil, err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return 0, nil, err
+	}
+	return fi.Size(), f, nil
+}
+
+// Delete removes the entire first directory segment for the key under root/<id>/.
+func (s *Store) Delete(id, key string) error {
+	pathKey := s.PathTransformFunc(key)
+	first := pathKey.FirstPathName()
+	if len(first) == 0 {
+		return nil
+	}
+	targetDir := s.pathFor(id, first)
+	return os.RemoveAll(targetDir)
+}
+
+// Clear removes the entire root directory.
 func (s *Store) Clear() error {
 	return os.RemoveAll(s.Root)
-}
-
-// Instead of Reader we might pass a peers net.Conn as it has a reader
-func (s *Store) writeStream(key string, r io.Reader) error {
-	pathKey := s.PathTransformFunc(key)
-	if err := os.MkdirAll(s.Root+"/"+pathKey.PathName, os.ModePerm); err != nil {
-		return err
-	}
-	pathAndFullPath := s.Root + "/" + pathKey.FullPath()
-	f, err := os.Create(pathAndFullPath)
-	if err != nil {
-		return err
-	}
-	n, err := io.Copy(f, r)
-	if err != nil {
-		return err
-	}
-	log.Println("------------------------------")
-	log.Printf("written => (%d) to the disk in %s \n", n, pathAndFullPath)
-	log.Println("------------------------------")
-	defer f.Close()
-	return nil
 }

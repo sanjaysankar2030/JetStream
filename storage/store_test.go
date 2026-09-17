@@ -2,86 +2,140 @@ package storage
 
 import (
 	"bytes"
-	"fmt"
 	"io"
-	"log"
 	"testing"
+
+	"jetstream/crypto"
+
+	"github.com/stretchr/testify/assert"
 )
 
-func TestPathTrasformFunc(t *testing.T) {
+func TestPathTransformFunc(t *testing.T) {
 	key := "noods"
-	pathKey := CASPathTrasformFunc(key)
-	expectedOriginalKey := "f87e0e4b4b505750ffb00a1fccc0c132bf24c4ef"
+	pathKey := CASPathTransformFunc(key)
+	expectedFilename := "f87e0e4b4b505750ffb00a1fccc0c132bf24c4ef"
 	expectedPathName := "f87e0/e4b4b/50575/0ffb0/0a1fc/cc0c1/32bf2/4c4ef"
-	if pathKey.PathName != expectedPathName || pathKey.Filename != expectedOriginalKey {
-		t.Errorf(" have %s want %s ", pathKey.PathName, expectedPathName)
-		t.Errorf(" have %s want %s ", pathKey.Filename, expectedOriginalKey)
-	}
+
+	assert.Equal(t, expectedPathName, pathKey.PathName)
+	assert.Equal(t, expectedFilename, pathKey.Filename)
 }
 
-func TestStoreDeleteKey(t *testing.T) {
+func TestStoreWriteReadDelete(t *testing.T) {
 	opts := StoreOpts{
-		PathTransformFunc: CASPathTrasformFunc,
-	}
-	key := "noods"
-	s := NewStore(opts)
-	// Reader reads the slice of bytes
-	data := []byte("some png")
-	if err := s.writeStream(key, bytes.NewReader(data)); err != nil {
-		t.Error(err)
-	}
-	if err := s.Delete(key); err != nil {
-		t.Error(err)
-	}
-}
-
-func TestStore(t *testing.T) {
-	opts := StoreOpts{
-		PathTransformFunc: CASPathTrasformFunc,
+		Root:              "test_store_root",
+		PathTransformFunc: CASPathTransformFunc,
 	}
 	s := NewStore(opts)
-	// defer teardown(t, s)
-	for i := range 50 {
-		key := fmt.Sprintf("foo_%d", i)
-		// New Store Initialization
-		// Teardown deletes the root dir which is defaultRoot
-		// Reader reads the slice of bytes
-		data := []byte("some png")
-		if err := s.writeStream(key, bytes.NewReader(data)); err != nil {
-			t.Error(err)
-		}
-		if has := s.Has(key); !has {
-			t.Errorf("Expected to have key %s have Null", key)
-		}
-		r, err := s.Read(key)
-		if err != nil {
-			log.Print("Error while Reading ")
-			t.Error(err)
-		}
-		b, _ := io.ReadAll(r)
-		if string(b) != string(data) {
-			t.Errorf("Want | %s | Have | %s | ", b, data)
-		}
-		del_err := s.Delete(key)
-		if del_err != nil {
-			t.Errorf("Error while Deletion\n [%s]", del_err)
-		}
-		fmt.Println("Deletion Succesful")
-		if has := s.Has(key); has {
-			t.Errorf("Expected to Not have key but have key \n [%s] ", key)
-		}
+	defer s.Clear()
+
+	nodeID := "node_alpha"
+	key := "mySpecialFile"
+	content := []byte("hello distributed file system")
+
+	// Verify not present initially
+	assert.False(t, s.Has(nodeID, key))
+
+	// Write
+	n, err := s.Write(nodeID, key, bytes.NewReader(content))
+	assert.NoError(t, err)
+	assert.Equal(t, int64(len(content)), n)
+
+	// Has
+	assert.True(t, s.Has(nodeID, key))
+
+	// Read
+	size, r, err := s.Read(nodeID, key)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(len(content)), size)
+
+	readBytes, err := io.ReadAll(r)
+	assert.NoError(t, err)
+	assert.Equal(t, content, readBytes)
+
+	if rc, ok := r.(io.Closer); ok {
+		rc.Close()
 	}
+
+	// Delete
+	err = s.Delete(nodeID, key)
+	assert.NoError(t, err)
+	assert.False(t, s.Has(nodeID, key))
 }
 
-func newStore() *Store {
+func TestStoreWriteDecrypt(t *testing.T) {
 	opts := StoreOpts{
-		PathTransformFunc: CASPathTrasformFunc,
+		Root:              "test_store_decrypt_root",
+		PathTransformFunc: CASPathTransformFunc,
 	}
-	return NewStore(opts)
+	s := NewStore(opts)
+	defer s.Clear()
+
+	nodeID := "node_beta"
+	key := "encryptedDoc"
+	plaintext := []byte("secret contents that travel encrypted over the wire")
+	encKey := crypto.NewEncryptionKey()
+
+	// Encrypt to buffer
+	encBuf := new(bytes.Buffer)
+	_, err := crypto.CopyEncrypt(encKey, bytes.NewReader(plaintext), encBuf)
+	assert.NoError(t, err)
+
+	// WriteDecrypt onto disk
+	n, err := s.WriteDecrypt(encKey, nodeID, key, encBuf)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(len(plaintext)), n)
+
+	// Read decrypted file from disk
+	assert.True(t, s.Has(nodeID, key))
+	size, r, err := s.Read(nodeID, key)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(len(plaintext)), size)
+
+	diskBytes, err := io.ReadAll(r)
+	assert.NoError(t, err)
+	assert.Equal(t, plaintext, diskBytes)
+
+	if rc, ok := r.(io.Closer); ok {
+		rc.Close()
+	}
 }
 
-func teardown(t *testing.T, s *Store) {
-	if err := s.Clear(); err != nil {
-		t.Error(err)
+func TestNodeNamespacingIsolation(t *testing.T) {
+	opts := StoreOpts{
+		Root:              "test_store_isolation_root",
+		PathTransformFunc: CASPathTransformFunc,
+	}
+	s := NewStore(opts)
+	defer s.Clear()
+
+	key := "shared_key"
+	node1 := "node_1111"
+	node2 := "node_2222"
+
+	content1 := []byte("content for node 1")
+	content2 := []byte("content for node 2")
+
+	_, err := s.Write(node1, key, bytes.NewReader(content1))
+	assert.NoError(t, err)
+
+	_, err = s.Write(node2, key, bytes.NewReader(content2))
+	assert.NoError(t, err)
+
+	assert.True(t, s.Has(node1, key))
+	assert.True(t, s.Has(node2, key))
+
+	// Delete node1's file, node2's must remain
+	err = s.Delete(node1, key)
+	assert.NoError(t, err)
+
+	assert.False(t, s.Has(node1, key))
+	assert.True(t, s.Has(node2, key))
+
+	_, r2, err := s.Read(node2, key)
+	assert.NoError(t, err)
+	b2, _ := io.ReadAll(r2)
+	assert.Equal(t, content2, b2)
+	if rc, ok := r2.(io.Closer); ok {
+		rc.Close()
 	}
 }

@@ -9,8 +9,8 @@ run: build
 test:
 	go test ./... -v -run $(t)
 
-guiBuild:
-	go build -ldflags="-H windowsgui" -o bin/gui
+git:
+	git add .
+	git commit -m "Encrypting and Decrypting with tests"
+	git push -u origin main 
 
-guiRun:guiBuild
-	@./bin/gui -gui

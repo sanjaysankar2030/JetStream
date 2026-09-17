@@ -1,11 +1,13 @@
 package server
 
-import (
-	"io"
-)
+import "io"
+
+// FileServer is the interface for a distributed file system node.
 type FileServer interface {
-	Start()error
+	Start() error
 	Stop()
-	StoreData(string , io.Reader)error
+	Store(string, io.Reader) error
+	StoreData(string, io.Reader) error
+	Get(string) (io.Reader, error)
 	Close()
 }
