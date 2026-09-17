@@ -1,7 +1,6 @@
 # Distributed File System in Go — Complete Project Reference
 
 ---
-https://github.com/rohitg00/ai-engineering-from-scratch/tree/main/phases/14-agent-engineering/54-build-the-feedback-ratchet.git
 
 ## Table of Contents
 
